@@ -90,100 +90,87 @@ The integration will store authentication tokens securely and handle automatic t
 
 ### Finding Your Node ID
 
-Your heating node ID is required for service calls. You can find it in several ways:
+Your heating node ID is required for service calls. You can find it from the hive webapp 
+https://my.hivehome.com/
+Once logged in goto your heating
+the node id is the last part of the URL:
 
-#### Method 1: Developer Tools (Easiest)
-
-1. Go to **Developer Tools** → **States**
-2. Search for `climate.` entities from your Hive integration
-3. Click on a Hive thermostat entity
-4. Look for `node_id` in the attributes
-
-Example:
-```yaml
-node_id: "d2708e98-f22f-483e-b590-9ddbd642a3b7"
-```
-
-#### Method 2: Using the Hive App
-
-Your node ID corresponds to your Hive receiver/thermostat. While the Hive app doesn't display it directly, you can use the Developer Tools method above which references the same device.
+https://my.hivehome.com/products/heating/**abcd1234-ab23-ab32-ab99-abcdef12345**
 
 ---
 
+
 ## 🎨 Schedule Profiles
 
-The integration includes 8 pre-defined heating profiles optimized for different scenarios:
+The integration includes 6 pre-defined heating profiles optimized for different scenarios. These profiles are stored in `hive_schedule_profiles.yaml` in your Home Assistant config directory and can be customized without restarting HA.
 
-### 1. **weekday** - Standard Work Schedule
-Perfect for typical Monday-Friday work schedules.
+### 1. **workday** - Standard Work Schedule
+Perfect for typical Monday-Friday work schedules with very early start.
 
 | Time  | Temperature | Purpose |
 |-------|-------------|---------|
-| 06:30 | 18.0°C | Morning warmup |
-| 08:00 | 16.0°C | Away during day |
+| 05:20 | 18.5°C | Very early morning warmup |
+| 07:00 | 18.0°C | Morning comfort |
 | 16:30 | 19.5°C | Evening warmup |
-| 21:30 | 16.0°C | Night setback |
+| 21:45 | 16.0°C | Night setback |
 
 ### 2. **weekend** - Relaxed Weekend Schedule
 Later start, comfortable daytime temperatures.
 
 | Time  | Temperature | Purpose |
 |-------|-------------|---------|
-| 07:30 | 18.0°C | Later morning warmup |
-| 09:00 | 19.0°C | Comfortable day |
+| 07:30 | 18.5°C | Later morning warmup |
+| 09:00 | 18.0°C | Comfortable day |
+| 16:30 | 19.5°C | Evening warmup |
 | 22:00 | 16.0°C | Later night setback |
 
-### 3. **holiday** - Holiday/Vacation Home
-Relaxed schedule for when you're at home all day.
+### 3. **nonworkday** - Non-Working Day
+Similar to workday but slightly later start, ideal for Fridays or flexible days.
 
 | Time  | Temperature | Purpose |
 |-------|-------------|---------|
-| 08:00 | 18.0°C | Relaxed morning |
-| 22:30 | 16.0°C | Extended evening |
-
-### 4. **weekday_early** - Early Morning Start
-For early risers or shift workers.
-
-| Time  | Temperature | Purpose |
-|-------|-------------|---------|
-| 05:30 | 18.0°C | Early morning |
-| 07:00 | 16.0°C | Away during day |
+| 06:30 | 18.5°C | Morning warmup |
+| 08:00 | 18.0°C | Morning comfort |
 | 16:30 | 19.5°C | Evening warmup |
-| 21:30 | 16.0°C | Night setback |
-
-### 5. **weekday_late** - Late Return Home
-For those working late or evening activities.
-
-| Time  | Temperature | Purpose |
-|-------|-------------|---------|
-| 06:30 | 18.0°C | Morning warmup |
-| 08:00 | 16.0°C | Away during day |
-| 18:30 | 19.5°C | Late evening warmup |
-| 23:00 | 16.0°C | Late night setback |
-
-### 6. **wfh** - Work From Home
-Maintains comfort throughout the workday.
-
-| Time  | Temperature | Purpose |
-|-------|-------------|---------|
-| 06:30 | 18.0°C | Morning warmup |
-| 09:00 | 19.0°C | Comfortable workday |
-| 17:00 | 19.5°C | Evening |
 | 22:00 | 16.0°C | Night setback |
 
-### 7. **away** - Away/Vacation Mode
-Minimal heating for frost protection when away.
+### 4. **holiday** - Minimal Heating
+Low temperature for holidays when away from home.
 
 | Time  | Temperature | Purpose |
 |-------|-------------|---------|
-| 00:00 | 12.0°C | Frost protection only |
+| 00:00 | 15.0°C | Minimal heating all day |
 
-### 8. **all_day_comfort** - Constant Comfort
-Maintains constant temperature all day.
+### 5. **all_day_comfort** - Constant Comfort
+Maintains constant comfortable temperature all day.
 
 | Time  | Temperature | Purpose |
 |-------|-------------|---------|
 | 00:00 | 19.0°C | All-day comfort |
+
+### 6. **custom1** - Custom Profile Template 1
+Example custom profile with multiple temperature changes.
+
+| Time  | Temperature | Purpose |
+|-------|-------------|---------|
+| 05:30 | 17.0°C | Early start |
+| 08:00 | 16.5°C | Morning setback |
+| 12:00 | 18.0°C | Midday warmup |
+| 17:00 | 19.0°C | Evening comfort |
+| 22:30 | 16.0°C | Night setback |
+
+### 7. **custom2** - Custom Profile Template 2
+Alternative custom profile template.
+
+| Time  | Temperature | Purpose |
+|-------|-------------|---------|
+| 06:00 | 18.0°C | Morning warmup |
+| 09:00 | 17.5°C | Day setback |
+| 13:00 | 18.5°C | Afternoon warmup |
+| 18:00 | 19.5°C | Evening comfort |
+| 23:00 | 16.5°C | Night setback |
+
+> **💡 Customizing Profiles**: Edit `/config/hive_schedule_profiles.yaml` to add your own profiles or modify existing ones. Changes take effect immediately on the next service call - no restart required!
 
 ---
 
@@ -250,7 +237,7 @@ Update Saturday's schedule with a custom profile:
 ```yaml
 service: hive_schedule.set_day_schedule
 data:
-  node_id: "d2708e98-f22f-483e-b590-9ddbd642a3b7"
+  node_id: "abcd1234-ab23-ab32-ab99-abcdef12345"
   day: "saturday"
   profile: "weekend"
 ```
@@ -262,7 +249,7 @@ Create your own temperature schedule:
 ```yaml
 service: hive_schedule.set_day_schedule
 data:
-  node_id: "d2708e98-f22f-483e-b590-9ddbd642a3b7"
+  node_id: "abcd1234-ab23-ab32-ab99-abcdef12345"
   day: "monday"
   schedule:
     - time: "06:00"
@@ -318,7 +305,7 @@ actions:
             value_template: "{{ has_holiday }}"
         sequence:
           - data:
-              node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+              node_id: abcd1234-ab23-ab32-ab99-abcdef12345
               day: "{{ tomorrow_day_name }}"
               profile: holiday
             action: hive_schedule.set_day_schedule
@@ -333,7 +320,7 @@ actions:
             value_template: "{{ has_nonworkday }}"
         sequence:
           - data:
-              node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+              node_id: abcd1234-ab23-ab32-ab99-abcdef12345
               day: "{{ tomorrow_day_name }}"
               profile: weekend
             action: hive_schedule.set_day_schedule
@@ -348,7 +335,7 @@ actions:
             value_template: "{{ has_workday }}"
         sequence:
           - data:
-              node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+              node_id: abcd1234-ab23-ab32-ab99-abcdef12345
               day: "{{ tomorrow_day_name }}"
               profile: weekday
             action: hive_schedule.set_day_schedule
@@ -363,7 +350,7 @@ actions:
             value_template: "{{ tomorrow_day in [0, 1, 2, 3] }}"
         sequence:
           - data:
-              node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+              node_id: abcd1234-ab23-ab32-ab99-abcdef12345
               day: "{{ tomorrow_day_name }}"
               profile: weekday
             action: hive_schedule.set_day_schedule
@@ -378,7 +365,7 @@ actions:
             value_template: "{{ tomorrow_day == 4 }}"
         sequence:
           - data:
-              node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+              node_id: abcd1234-ab23-ab32-ab99-abcdef12345
               day: "{{ tomorrow_day_name }}"
               profile: weekend
             action: hive_schedule.set_day_schedule
@@ -390,7 +377,7 @@ actions:
     # Weekend default
     default:
       - data:
-          node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+          node_id: abcd1234-ab23-ab32-ab99-abcdef12345
           day: "{{ tomorrow_day_name }}"
           profile: weekend
         action: hive_schedule.set_day_schedule
@@ -413,7 +400,7 @@ script:
     sequence:
       - service: hive_schedule.set_day_schedule
         data:
-          node_id: "d2708e98-f22f-483e-b590-9ddbd642a3b7"
+          node_id: "abcd1234-ab23-ab32-ab99-abcdef12345"
           day: "{{ now().strftime('%A').lower() }}"
           profile: "wfh"
 
@@ -449,7 +436,7 @@ Update the heating schedule for a single day.
 ```yaml
 service: hive_schedule.set_day_schedule
 data:
-  node_id: "d2708e98-f22f-483e-b590-9ddbd642a3b7"
+  node_id: "abcd1234-ab23-ab32-ab99-abcdef12345"
   day: "wednesday"
   profile: "wfh"
 ```
@@ -458,7 +445,7 @@ data:
 ```yaml
 service: hive_schedule.set_day_schedule
 data:
-  node_id: "d2708e98-f22f-483e-b590-9ddbd642a3b7"
+  node_id: "dabcd1234-ab23-ab32-ab99-abcdef12345"
   day: "thursday"
   schedule:
     - time: "07:00"
@@ -481,7 +468,7 @@ Retrieve the current heating schedule from Hive (reads actual schedule from Hive
 ```yaml
 service: hive_schedule.get_schedule
 data:
-  node_id: "d2708e98-f22f-483e-b590-9ddbd642a3b7"
+  node_id: "abcd1234-ab23-ab32-ab99-abcdef12345"
 response_variable: current_schedule
 ```
 
