@@ -39,7 +39,7 @@
 2. **Add Custom Repository**
    - Click the **⋮** menu (top right)
    - Select **Custom repositories**
-   - Add repository URL: `https://github.com/yourusername/hive-schedule-manager`
+   - Add repository URL: `https://github.com/rrwood/hive-schedule-manager`
    - Category: **Integration**
    - Click **Add**
 
