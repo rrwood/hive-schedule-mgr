@@ -95,7 +95,7 @@ https://my.hivehome.com/
 Once logged in goto your heating
 the node id is the last part of the URL:
 
-https://my.hivehome.com/products/heating/**abcd1234-ab23-ab32-ab99-abcdef12345**
+https://my.hivehome.com/products/heating/ **abcd1234-ab23-ab32-ab99-abcdef12345**
 
 ---
 
