@@ -1,0 +1,107 @@
+alias: Set Tomorrow's Heating Profile
+description: ""
+triggers:
+  - at: "20:00:00"
+    trigger: time
+conditions: []
+actions:
+  - target:
+      entity_id: calendar.homeautomation
+    data:
+      start_date_time: >-
+        {{ (today_at('00:00') + timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')
+        }}
+      duration:
+        hours: 24
+    action: calendar.get_events
+    response_variable: tomorrow_events
+  - variables:
+      tomorrow_day: "{{ (now() + timedelta(days=1)).weekday() }}"
+      tomorrow_day_name: "{{ (now() + timedelta(days=1)).strftime('%A').lower() }}"
+      events: "{{ tomorrow_events['calendar.homeautomation'].events }}"
+      has_holiday: >-
+        {{ events | selectattr('summary', 'search', 'holiday', ignorecase=True)
+        | list | length > 0 }}
+      has_nonworkday: >-
+        {{ events | selectattr('summary', 'search', 'nonworkday',
+        ignorecase=True) | list | length > 0 }}
+      has_workday: >-
+        {{ events | selectattr('summary', 'search', 'workday', ignorecase=True)
+        | list | length > 0 }}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ has_holiday }}"
+        sequence:
+          - data:
+              node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+              day: "{{ tomorrow_day_name }}"
+              profile: holiday
+            action: hive_schedule.set_day_schedule
+          - data:
+              message: Heating for tomorrow set to Holiday
+              title: HEATING
+            action: notify.pushover
+      - conditions:
+          - condition: template
+            value_template: "{{ has_nonworkday }}"
+        sequence:
+          - data:
+              node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+              day: "{{ tomorrow_day_name }}"
+              profile: nonworkday
+            action: hive_schedule.set_day_schedule
+          - data:
+              message: Heating for tomorrow set to Non-workday
+              title: HEATING
+            action: notify.pushover
+      - conditions:
+          - condition: template
+            value_template: "{{ has_workday }}"
+        sequence:
+          - data:
+              node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+              day: "{{ tomorrow_day_name }}"
+              profile: workday
+            action: hive_schedule.set_day_schedule
+          - data:
+              message: Heating for tomorrow set to Workday
+              title: HEATING
+            action: notify.pushover
+      - conditions:
+          - condition: template
+            value_template: "{{ tomorrow_day in [0, 1, 2, 3] }}"
+        sequence:
+          - data:
+              node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+              day: "{{ tomorrow_day_name }}"
+              profile: workday
+            action: hive_schedule.set_day_schedule
+          - data:
+              message: Heating for tomorrow set to Workday
+              title: HEATING
+            action: notify.pushover
+      - conditions:
+          - condition: template
+            value_template: "{{ tomorrow_day == 4 }}"
+        sequence:
+          - data:
+              node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+              day: "{{ tomorrow_day_name }}"
+              profile: nonworkday
+            action: hive_schedule.set_day_schedule
+          - data:
+              message: Heating for tomorrow set to Non-workday
+              title: HEATING
+            action: notify.pushover
+    default:
+      - data:
+          node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+          day: "{{ tomorrow_day_name }}"
+          profile: weekend
+        action: hive_schedule.set_day_schedule
+      - data:
+          message: Heating for tomorrow set to Weekend
+          title: HEATING
+        action: notify.pushover
+mode: single
