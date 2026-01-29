@@ -18,7 +18,7 @@
 param(
     [string]$CommitMessage = "Update version",
     [string]$Branch = "main",
-    [string]$VersionFile = "version.txt"
+    [string]$ManifestFile = "custom_components/hive_schedule/manifest.json"
 )
 
 # Auto-detect repository information
@@ -34,35 +34,39 @@ $repoData = $repoInfo | ConvertFrom-Json
 $repoName = $repoData.nameWithOwner
 $repoUrl = $repoData.url
 
-# Get current version from version.txt
-if (Test-Path $VersionFile) {
-    $currentVersion = (Get-Content $VersionFile -Raw).Trim()
+# Get current version from manifest.json
+if (Test-Path $ManifestFile) {
+    try {
+        $manifestRaw = Get-Content $ManifestFile -Raw
+        $manifest = $manifestRaw | ConvertFrom-Json
+    } catch {
+        Write-Host "Error: Failed to read/parse $ManifestFile" -ForegroundColor Red
+        exit 1
+    }
+    if (-not $manifest.version) {
+        Write-Host "Error: 'version' key not found in $ManifestFile" -ForegroundColor Red
+        exit 1
+    }
+    $currentVersion = $manifest.version.Trim()
 } else {
-    Write-Host "Warning: $VersionFile not found. Creating with default version 1.0.0" -ForegroundColor Yellow
-    $currentVersion = "1.0.0"
-    $currentVersion | Out-File $VersionFile -NoNewline
-}
-
-# Parse version - flexible format handler
-# Supports: v1.1.1, 1.1, 1.0.1, V2.0, etc.
-$versionPattern = '^([a-zA-Z]*)(\d+(?:\.\d+)*)$'
-$match = $currentVersion -match $versionPattern
-
-if (-not $match) {
-    Write-Host "Invalid version format in $VersionFile" -ForegroundColor Red
-    Write-Host "Current content: '$currentVersion'" -ForegroundColor Red
-    Write-Host "Expected format: [optional prefix]number.number or [optional prefix]number.number.number" -ForegroundColor Yellow
-    Write-Host "Examples: v1.0, 1.0.1, V2.3.4" -ForegroundColor Yellow
+    Write-Host "Error: Manifest file not found at $ManifestFile" -ForegroundColor Red
     exit 1
 }
 
-$prefix = $matches[1]
-$numericVersion = $matches[2]
-$versionParts = $numericVersion -split '\.'
+# Parse version - flexible format handler (optional non-numeric prefix, any number of numeric parts)
+$raw = $currentVersion.Trim()
+if ($raw -match '^(?<prefix>[^\d]*)(?<nums>\d+(?:\.\d+)*)$') {
+    $prefix = $matches['prefix']
+    $numericVersion = $matches['nums']
+} else {
+    Write-Host "Invalid version format in $ManifestFile" -ForegroundColor Red
+    Write-Host "Current content: '$currentVersion'" -ForegroundColor Red
+    exit 1
+}
 
-# Increment the last digit
+$versionParts = $numericVersion -split '\.'
 $lastIndex = $versionParts.Length - 1
-$versionParts[$lastIndex] = [int]$versionParts[$lastIndex] + 1
+$versionParts[$lastIndex] = ([int]$versionParts[$lastIndex] + 1).ToString()
 $newNumericVersion = $versionParts -join '.'
 $newVersion = "$prefix$newNumericVersion"
 
@@ -114,10 +118,16 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "Warning: Failed to pull from remote. Continuing anyway..." -ForegroundColor Yellow
 }
 
-# 3. Update version file first
-Write-Host "[3/8] Updating version file..." -ForegroundColor Yellow
-$newVersion | Out-File $VersionFile -NoNewline
-Write-Host "OK - Version file updated to $newVersion" -ForegroundColor Green
+# 3. Update manifest version
+Write-Host "[3/8] Updating manifest version..." -ForegroundColor Yellow
+$manifest.version = $newVersion
+try {
+    $manifest | ConvertTo-Json -Depth 10 | Out-File $ManifestFile -Encoding utf8
+    Write-Host "OK - Manifest updated to $newVersion" -ForegroundColor Green
+} catch {
+    Write-Host "Error: Failed to write $ManifestFile" -ForegroundColor Red
+    exit 1
+}
 
 # 4. Stage all changes
 Write-Host "[4/8] Staging changes..." -ForegroundColor Yellow

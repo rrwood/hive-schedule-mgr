@@ -1,7 +1,6 @@
 """
 Hive Schedule Manager Integration for Home Assistant
-Version: 1.0.3 (Can Update schedules and has working 2FA)
- - adding improved logging to capture reason for token refresh failures
+Dynamic version loaded from manifest.json
 """
 from __future__ import annotations
 
@@ -42,6 +41,18 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Load version from manifest.json
+def _get_version() -> str:
+    """Get version from manifest.json."""
+    try:
+        manifest_path = os.path.join(os.path.dirname(__file__), "manifest.json")
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
+            return manifest.get('version', 'unknown')
+    except Exception:
+        return 'unknown'
+
+VERSION = _get_version()
 DEFAULT_SCAN_INTERVAL = timedelta(minutes=30)
 PROFILES_FILE = "hive_schedule_profiles.yaml"
 
@@ -273,6 +284,8 @@ class HiveAuth:
     
     def refresh_token(self) -> bool:
         """Refresh the authentication token using refresh token."""
+        from botocore.exceptions import ClientError
+        
         try:
             # Check if we need to refresh
             if self._token_expiry and datetime.now() < self._token_expiry - timedelta(minutes=5):
@@ -280,7 +293,7 @@ class HiveAuth:
                 return True
             
             if not self._refresh_token:
-                _LOGGER.warning("No refresh token available")
+                _LOGGER.warning("No refresh token available, need full re-authentication")
                 return False
             
             _LOGGER.info("Refreshing authentication token...")
@@ -311,6 +324,27 @@ class HiveAuth:
             _LOGGER.info("Successfully refreshed authentication token")
             return True
             
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "")
+            
+            # Handle invalid refresh token - requires full re-authentication
+            if error_code == "NotAuthorizedException":
+                _LOGGER.error(
+                    "Refresh token is invalid or expired. "
+                    "Please reconfigure the integration to re-authenticate with MFA. "
+                    "Go to Settings -> Devices & Services -> Hive Schedule Manager -> Configure"
+                )
+                # Clear invalid tokens
+                self._id_token = None
+                self._access_token = None
+                self._refresh_token = None
+                self._token_expiry = None
+                return False
+            else:
+                _LOGGER.error("ClientError refreshing token: %s - %s", error_code, e)
+                _LOGGER.debug("Token refresh error details", exc_info=True)
+                return False
+                
         except AttributeError as e:
             _LOGGER.error("Failed to refresh token - AttributeError (missing token attributes): %s", e)
             _LOGGER.debug("Token refresh error details", exc_info=True)
@@ -509,7 +543,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Hive Schedule Manager from a config entry."""
     
     _LOGGER.info("=" * 80)
-    _LOGGER.info("Hive Schedule Manager v1.1.17 Production")
+    _LOGGER.info("Hive Schedule Manager v%s", VERSION)
     _LOGGER.info("POST-based schedule updates with YAML profiles")
     _LOGGER.info("=" * 80)
     
