@@ -37,9 +37,6 @@ from .const import (
     CONF_ACCESS_TOKEN,
     CONF_REFRESH_TOKEN,
     CONF_TOKEN_EXPIRY,
-    CONF_DEVICE_KEY,
-    CONF_DEVICE_GROUP_KEY,
-    CONF_DEVICE_PASSWORD,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -275,10 +272,6 @@ class HiveAuth:
         self._access_token = entry.data.get(CONF_ACCESS_TOKEN)
         self._refresh_token = entry.data.get(CONF_REFRESH_TOKEN)
         
-        # Load device keys for trusted device status
-        self._device_key = entry.data.get(CONF_DEVICE_KEY)
-        self._device_group_key = entry.data.get(CONF_DEVICE_GROUP_KEY)
-        
         # Parse token expiry
         expiry_str = entry.data.get(CONF_TOKEN_EXPIRY)
         if expiry_str:
@@ -304,8 +297,6 @@ class HiveAuth:
                 return False
             
             _LOGGER.info("Refreshing authentication token...")
-            if self._device_key:
-                _LOGGER.debug("Using device key for trusted device refresh")
             
             # Create Cognito instance with current tokens
             self._cognito = Cognito(
@@ -318,39 +309,12 @@ class HiveAuth:
                 refresh_token=self._refresh_token,
             )
             
-            # Use direct boto3 call to include device key if available
-            if self._device_key:
-                try:
-                    client = self._cognito.client
-                    auth_params = {
-                        "REFRESH_TOKEN": self._refresh_token,
-                        "DEVICE_KEY": self._device_key,
-                    }
-                    
-                    refresh_response = client.initiate_auth(
-                        ClientId=COGNITO_CLIENT_ID,
-                        AuthFlow="REFRESH_TOKEN_AUTH",
-                        AuthParameters=auth_params,
-                    )
-                    
-                    # Extract tokens from response
-                    auth_result = refresh_response['AuthenticationResult']
-                    self._id_token = auth_result['IdToken']
-                    self._access_token = auth_result['AccessToken']
-                    _LOGGER.debug("Token refresh with device key successful")
-                    
-                except Exception as device_error:
-                    _LOGGER.warning("Token refresh with device key failed, trying without: %s", device_error)
-                    # Fall back to standard refresh without device key
-                    self._cognito.renew_access_token()
-                    self._id_token = self._cognito.id_token
-                    self._access_token = self._cognito.access_token
-            else:
-                # Standard refresh without device key
-                self._cognito.renew_access_token()
-                self._id_token = self._cognito.id_token
-                self._access_token = self._cognito.access_token
+            # Refresh tokens using pycognito
+            self._cognito.renew_access_token()
             
+            # Update stored tokens (refresh_token stays the same)
+            self._id_token = self._cognito.id_token
+            self._access_token = self._cognito.access_token
             # Note: refresh_token doesn't change, keep the existing one
             self._token_expiry = datetime.now() + timedelta(minutes=55)
             

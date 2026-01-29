@@ -24,9 +24,6 @@ from .const import (
     CONF_ACCESS_TOKEN,
     CONF_REFRESH_TOKEN,
     CONF_TOKEN_EXPIRY,
-    CONF_DEVICE_KEY,
-    CONF_DEVICE_GROUP_KEY,
-    CONF_DEVICE_PASSWORD,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -108,7 +105,6 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     # MFA verified successfully
                     _LOGGER.info("MFA verified, storing tokens and creating entry")
                     self._auth_result = result.get("auth_result")
-                    self._device_info = result.get("device_info", {})
                     return await self._create_or_update_entry()
                 else:
                     _LOGGER.warning("MFA verification failed")
@@ -146,12 +142,6 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             expiry = (datetime.now() + timedelta(minutes=55)).isoformat()
             entry_data[CONF_TOKEN_EXPIRY] = expiry
             _LOGGER.debug("Stored authentication tokens in config entry")
-        
-        # Add device info if available (enables long-lived refresh tokens)
-        if hasattr(self, '_device_info') and self._device_info:
-            entry_data[CONF_DEVICE_KEY] = self._device_info.get('device_key', '')
-            entry_data[CONF_DEVICE_GROUP_KEY] = self._device_info.get('device_group_key', '')
-            _LOGGER.debug("Stored device keys for trusted device status")
         
         # Check if entry already exists
         existing_entry = await self.async_set_unique_id(self._username.lower())
@@ -246,30 +236,14 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.info("MFA verification successful - tokens received")
                 auth_result = response['AuthenticationResult']
                 
-                # Check if device tracking is enabled (NewDeviceMetadata present)
-                device_info = {}
-                if 'NewDeviceMetadata' in auth_result:
-                    device_metadata = auth_result['NewDeviceMetadata']
-                    device_key = device_metadata.get('DeviceKey')
-                    device_group_key = device_metadata.get('DeviceGroupKey')
-                    
-                    if device_key:
-                        _LOGGER.debug("New device detected: %s", device_key[:20] + "...")
-                        # Confirm device for long-lived refresh tokens
-                        device_info = self._confirm_device(
-                            auth_result['AccessToken'],
-                            device_key,
-                            device_group_key
-                        )
-                    else:
-                        _LOGGER.warning("NewDeviceMetadata present but no DeviceKey found")
-                else:
-                    _LOGGER.debug("No NewDeviceMetadata in auth response - device tracking may not be enabled")
+                # Note: Device confirmation doesn't work with Hive's Cognito pool
+                # NewDeviceMetadata appears but can't be confirmed
+                # This is fine - we'll use automatic re-auth when tokens expire
                 
                 return {
                     "success": True,
                     "auth_result": auth_result,
-                    "device_info": device_info
+                    "device_info": {}  # Not used
                 }
             else:
                 _LOGGER.warning("MFA response did not contain authentication result")
@@ -289,40 +263,6 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             _LOGGER.exception("Unexpected error during MFA verification: %s", err)
             return {"success": False}
     
-    def _confirm_device(self, access_token: str, device_key: str, device_group_key: str = None) -> dict[str, str]:
-        """Confirm device with Cognito to enable long-lived refresh tokens."""
-        try:
-            client = self._cognito.client
-            
-            # Confirm the device with the device key from auth response
-            _LOGGER.debug("Confirming device for trusted status...")
-            confirm_response = client.confirm_device(
-                AccessToken=access_token,
-                DeviceKey=device_key,
-                DeviceName="HomeAssistant-HiveSchedule"
-            )
-            
-            # Device confirmation successful
-            user_confirmation_necessary = confirm_response.get('UserConfirmationNecessary', False)
-            _LOGGER.info("✓ Device confirmed as trusted: %s", device_key[:20] + "...")
-            if user_confirmation_necessary:
-                _LOGGER.info("Note: User confirmation may be required in Hive app")
-            
-            return {
-                'device_key': device_key,
-                'device_group_key': device_group_key or '',
-            }
-                
-        except ClientError as e:
-            error_code = e.response.get("Error", {}).get("Code", "")
-            error_msg = e.response.get("Error", {}).get("Message", "")
-            # Device confirmation is optional - log but don't fail
-            _LOGGER.warning("Could not confirm device (non-fatal): %s - %s", error_code, error_msg)
-            return {}
-        except Exception as e:
-            _LOGGER.warning("Device confirmation failed (non-fatal): %s", e)
-            _LOGGER.debug("Device confirmation error details", exc_info=True)
-            return {}
 
 
 class CannotConnect(Exception):

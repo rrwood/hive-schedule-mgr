@@ -631,6 +631,60 @@ This will show detailed request/response information in the logs.
 
 ---
 
+# Token Expiry Behavior
+
+## Current Situation
+
+The Hive Schedule Manager integration authenticates with AWS Cognito, which provides:
+- **ID Token**: Used for API requests (expires in ~1 hour)
+- **Access Token**: Used for authentication (expires in ~1 hour)  
+- **Refresh Token**: Used to get new tokens (expires based on Cognito pool settings)
+
+### Refresh Token Lifetime
+
+Hive's AWS Cognito pool appears to be configured with:
+- **Refresh token validity**: ~1-2 hours (not 30 days)
+- **Device trust NOT supported**: The pool returns NewDeviceMetadata but doesn't accept device confirmation
+
+This means tokens expire relatively quickly compared to other services.
+
+## How the Integration Handles This
+
+1. **Automatic token refresh every 30 minutes**
+   - Keeps tokens fresh while you're using Home Assistant
+   - Works well during normal operation
+
+2. **When refresh fails** (token expired):
+   - Integration logs an error
+   - User needs to reconfigure the integration
+   - This typically happens after a few hours of inactivity
+
+## Workaround Options
+
+### Option 1: Accept Current Behavior (Recommended)
+- Reconfigure integration when needed (every few hours if not actively using it)
+- Simple and secure
+- Go to: Settings → Devices & Services → Hive Schedule Manager → Configure
+
+### Option 2: Store Password for Auto-Reauthentication (Future Enhancement)
+Could add automatic re-authentication that:
+- Stores encrypted password
+- Automatically re-authenticates when refresh fails
+- Would still require MFA code via notification/persistent notification
+
+This would require significant code changes and security considerations.
+
+## Why the Official Integration Works Differently
+
+The official Hive integration (`apyhiveapi`) stays logged in longer because it:
+- Uses a different authentication flow
+- May have different Cognito pool configuration
+- Or implements device password/verifier generation (complex SRP protocol)
+
+Our integration uses a simpler, more maintainable approach at the cost of more frequent re-authentication.
+
+---
+
 ## 🤝 Support & Contributions
 
 - **Issues**: [GitHub Issues](https://github.com/yourusername/hive-schedule-manager/issues)
