@@ -1,6 +1,7 @@
 """
 Hive Schedule Manager Integration for Home Assistant
-Version: 1.0.1 (Can Update schedules and has working 2FA)
+Version: 1.0.3 (Can Update schedules and has working 2FA)
+ - adding improved logging to capture reason for token refresh failures
 """
 from __future__ import annotations
 
@@ -284,7 +285,7 @@ class HiveAuth:
             
             _LOGGER.info("Refreshing authentication token...")
             
-            # Create Cognito instance
+            # Create Cognito instance with current tokens
             self._cognito = Cognito(
                 user_pool_id=COGNITO_POOL_ID,
                 client_id=COGNITO_CLIENT_ID,
@@ -295,12 +296,13 @@ class HiveAuth:
                 refresh_token=self._refresh_token,
             )
             
-            # Refresh tokens
+            # Refresh tokens using pycognito
             self._cognito.renew_access_token()
             
-            # Update stored tokens
+            # Update stored tokens (refresh_token stays the same)
             self._id_token = self._cognito.id_token
             self._access_token = self._cognito.access_token
+            # Note: refresh_token doesn't change, keep the existing one
             self._token_expiry = datetime.now() + timedelta(minutes=55)
             
             # Save updated tokens to config entry
@@ -309,8 +311,13 @@ class HiveAuth:
             _LOGGER.info("Successfully refreshed authentication token")
             return True
             
+        except AttributeError as e:
+            _LOGGER.error("Failed to refresh token - AttributeError (missing token attributes): %s", e)
+            _LOGGER.debug("Token refresh error details", exc_info=True)
+            return False
         except Exception as e:
-            _LOGGER.error("Failed to refresh token: %s", e)
+            _LOGGER.error("Failed to refresh token: %s (type: %s)", e, type(e).__name__)
+            _LOGGER.debug("Token refresh error details", exc_info=True)
             return False
     
     def _save_tokens(self) -> None:
