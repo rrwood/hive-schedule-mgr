@@ -41,6 +41,25 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._session_token = None
         self._cognito = None
         self._auth_result = None
+        self._reconfig_entry = None
+
+    @staticmethod
+    def async_get_options_flow(config_entry):
+        """Get the options flow for this handler."""
+        return HiveScheduleOptionsFlow(config_entry)
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None):
+        """Handle reconfiguration of the integration."""
+        self._reconfig_entry = self.hass.config_entries.async_get_entry(
+            self.context["entry_id"]
+        )
+        
+        # Pre-fill with existing username
+        if self._reconfig_entry:
+            self._username = self._reconfig_entry.data.get(CONF_USERNAME)
+            self._password = self._reconfig_entry.data.get(CONF_PASSWORD)
+        
+        return await self.async_step_user(user_input)
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -262,7 +281,28 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except Exception as err:
             _LOGGER.exception("Unexpected error during MFA verification: %s", err)
             return {"success": False}
-    
+
+
+class HiveScheduleOptionsFlow(config_entries.OptionsFlow):
+    """Handle options flow for reconfiguration."""
+
+    def __init__(self, config_entry):
+        """Initialize options flow."""
+        self.config_entry = config_entry
+
+    async def async_step_init(self, user_input=None):
+        """Manage the options - show reconfigure button."""
+        if user_input is not None:
+            # Trigger reconfiguration
+            return self.async_create_entry(title="", data={})
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema({}),
+            description_placeholders={
+                "info": "Click Submit to re-authenticate with your Hive account"
+            }
+        )
 
 
 class CannotConnect(Exception):

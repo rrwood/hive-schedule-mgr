@@ -639,6 +639,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=SET_DAY_SCHEMA
     )
     
+    # Add manual refresh service
+    async def handle_refresh_token(call: ServiceCall) -> None:
+        """Manually refresh authentication tokens."""
+        _LOGGER.info("Manual token refresh requested")
+        success = await hass.async_add_executor_job(auth.refresh_token)
+        if success:
+            _LOGGER.info("✓ Token refresh successful")
+        else:
+            _LOGGER.error(
+                "✗ Token refresh failed. "
+                "Please reconfigure: Settings → Devices & Services → "
+                "Hive Schedule Manager → Configure (⋮ menu)"
+            )
+    
+    hass.services.async_register(
+        DOMAIN,
+        "refresh_token",
+        handle_refresh_token
+    )
+    
     _LOGGER.info("Hive Schedule Manager setup complete")
     _LOGGER.info("Profiles file: %s", hass.config.path(PROFILES_FILE))
     return True
@@ -651,5 +671,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Unregister services if this is the last entry
     if not hass.data[DOMAIN]:
         hass.services.async_remove(DOMAIN, SERVICE_SET_DAY)
+        hass.services.async_remove(DOMAIN, "refresh_token")
     
     return True
