@@ -137,8 +137,9 @@ try {
         Write-Host "Warning: No version field replaced in $ManifestFile" -ForegroundColor Yellow
     }
 
-    # Write updated content back
-    $newContent | Out-File $manifestPath -Encoding utf8
+    # Write updated content back WITHOUT BOM
+    $encodingNoBOM = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($manifestPath.Path, $newContent, $encodingNoBOM)
 
     Write-Host "OK - Manifest updated to $newVersion (backup: $backup)" -ForegroundColor Green
 } catch {
