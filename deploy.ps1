@@ -118,14 +118,31 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "Warning: Failed to pull from remote. Continuing anyway..." -ForegroundColor Yellow
 }
 
-# 3. Update manifest version
+# 3. Update manifest version (in-place, preserve formatting)
 Write-Host "[3/8] Updating manifest version..." -ForegroundColor Yellow
-$manifest.version = $newVersion
 try {
-    $manifest | ConvertTo-Json -Depth 10 | Out-File $ManifestFile -Encoding utf8
-    Write-Host "OK - Manifest updated to $newVersion" -ForegroundColor Green
+    $manifestPath = Resolve-Path $ManifestFile
+    $content = Get-Content $manifestPath -Raw -ErrorAction Stop
+
+    # Backup original file
+    $backup = "$($manifestPath.Path).bak"
+    $content | Out-File $backup -Encoding utf8
+
+    # Replace only the version value, preserving surrounding whitespace/formatting
+    $pattern = '("version"\s*:\s*)"[^"]*"'
+    $replacement = '$1"' + $newVersion + '"'
+    $newContent = [regex]::Replace($content, $pattern, $replacement)
+
+    if ($newContent -eq $content) {
+        Write-Host "Warning: No version field replaced in $ManifestFile" -ForegroundColor Yellow
+    }
+
+    # Write updated content back
+    $newContent | Out-File $manifestPath -Encoding utf8
+
+    Write-Host "OK - Manifest updated to $newVersion (backup: $backup)" -ForegroundColor Green
 } catch {
-    Write-Host "Error: Failed to write $ManifestFile" -ForegroundColor Red
+    Write-Host "Error: Failed to update $ManifestFile - $_" -ForegroundColor Red
     exit 1
 }
 
