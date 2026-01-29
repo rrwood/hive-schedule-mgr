@@ -1,6 +1,4 @@
-"""Config flow for Hive Schedule Manager integration.
-Version: 1.0.1
-"""
+"""Config flow for Hive Schedule Manager integration."""
 from __future__ import annotations
 
 import logging
@@ -26,6 +24,9 @@ from .const import (
     CONF_ACCESS_TOKEN,
     CONF_REFRESH_TOKEN,
     CONF_TOKEN_EXPIRY,
+    CONF_DEVICE_KEY,
+    CONF_DEVICE_GROUP_KEY,
+    CONF_DEVICE_PASSWORD,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -107,6 +108,7 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     # MFA verified successfully
                     _LOGGER.info("MFA verified, storing tokens and creating entry")
                     self._auth_result = result.get("auth_result")
+                    self._device_info = result.get("device_info", {})
                     return await self._create_or_update_entry()
                 else:
                     _LOGGER.warning("MFA verification failed")
@@ -144,6 +146,12 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             expiry = (datetime.now() + timedelta(minutes=55)).isoformat()
             entry_data[CONF_TOKEN_EXPIRY] = expiry
             _LOGGER.debug("Stored authentication tokens in config entry")
+        
+        # Add device info if available (enables long-lived refresh tokens)
+        if hasattr(self, '_device_info') and self._device_info:
+            entry_data[CONF_DEVICE_KEY] = self._device_info.get('device_key', '')
+            entry_data[CONF_DEVICE_GROUP_KEY] = self._device_info.get('device_group_key', '')
+            _LOGGER.debug("Stored device keys for trusted device status")
         
         # Check if entry already exists
         existing_entry = await self.async_set_unique_id(self._username.lower())
@@ -236,9 +244,15 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # Check if we got authentication result
             if 'AuthenticationResult' in response:
                 _LOGGER.info("MFA verification successful - tokens received")
+                auth_result = response['AuthenticationResult']
+                
+                # Confirm device for long-lived refresh tokens
+                device_info = self._confirm_device(auth_result['AccessToken'])
+                
                 return {
                     "success": True,
-                    "auth_result": response['AuthenticationResult']
+                    "auth_result": auth_result,
+                    "device_info": device_info
                 }
             else:
                 _LOGGER.warning("MFA response did not contain authentication result")
@@ -257,6 +271,38 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         except Exception as err:
             _LOGGER.exception("Unexpected error during MFA verification: %s", err)
             return {"success": False}
+    
+    def _confirm_device(self, access_token: str) -> dict[str, str]:
+        """Confirm device with Cognito to enable long-lived refresh tokens."""
+        try:
+            client = self._cognito.client
+            
+            # Confirm the device
+            _LOGGER.debug("Confirming device for trusted status...")
+            confirm_response = client.confirm_device(
+                AccessToken=access_token,
+                DeviceName="HomeAssistant-HiveSchedule"
+            )
+            
+            device_key = confirm_response.get('DeviceKey')
+            if device_key:
+                _LOGGER.info("✓ Device confirmed as trusted: %s", device_key[:20] + "...")
+                return {
+                    'device_key': device_key,
+                    'device_group_key': confirm_response.get('DeviceGroupKey', ''),
+                }
+            else:
+                _LOGGER.warning("Device confirmation succeeded but no device key returned")
+                return {}
+                
+        except ClientError as e:
+            error_code = e.response.get("Error", {}).get("Code", "")
+            # Device confirmation is optional - log but don't fail
+            _LOGGER.warning("Could not confirm device (non-fatal): %s", error_code)
+            return {}
+        except Exception as e:
+            _LOGGER.warning("Device confirmation failed (non-fatal): %s", e)
+            return {}
 
 
 class CannotConnect(Exception):

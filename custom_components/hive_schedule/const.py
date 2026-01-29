@@ -1,6 +1,4 @@
-"""Constants for the Hive Schedule Manager integration.
-Version: 1.0.1
-"""
+"""Constants for the Hive Schedule Manager integration."""
 
 DOMAIN = "hive_schedule"
 
@@ -15,6 +13,9 @@ CONF_ID_TOKEN = "id_token"
 CONF_ACCESS_TOKEN = "access_token"
 CONF_REFRESH_TOKEN = "refresh_token"
 CONF_TOKEN_EXPIRY = "token_expiry"
+CONF_DEVICE_KEY = "device_key"
+CONF_DEVICE_GROUP_KEY = "device_group_key"
+CONF_DEVICE_PASSWORD = "device_password"
 
 # Service names
 SERVICE_SET_DAY = "set_day_schedule"
