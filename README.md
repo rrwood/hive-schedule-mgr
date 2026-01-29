@@ -66,6 +66,7 @@
 3. Search for "Hive Schedule Manager"
 4. Click to start setup
 
+
 ### Configuration Steps
 
 #### Step 1: Enter Credentials

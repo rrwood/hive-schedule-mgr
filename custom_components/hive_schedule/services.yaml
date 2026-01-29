@@ -6,7 +6,7 @@ set_day_schedule:
       name: Node ID
       description: The Hive heating node ID
       required: true
-      example: "d2708e98-f22f-483e-b590-9ddbd642a3b7"
+      example: "abcd1234-ab23-ab32-ab99-abcdef12345"
       selector:
         text:
     day:
@@ -52,7 +52,7 @@ get_schedule:
       name: Node ID
       description: The Hive heating node ID
       required: true
-      example: "d2708e98-f22f-483e-b590-9ddbd642a3b7"
+      example: "abcd1234-ab23-ab32-ab99-abcdef12345"
       selector:
         text:
 

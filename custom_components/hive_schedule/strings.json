@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Hive Schedule Manager",
-        "description": "This integration adds schedule management to your Hive heating. Make sure you have the official Hive integration configured first."
+        "description": "This integration adds schedule management to your Hive heating. Make sure you have the official Hive integration configured."
       }
     },
     "error": {

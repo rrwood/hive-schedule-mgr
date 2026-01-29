@@ -1,4 +1,6 @@
-"""Constants for the Hive Schedule Manager integration."""
+"""Constants for the Hive Schedule Manager integration.
+Version: 1.0.1
+"""
 
 DOMAIN = "hive_schedule"
 

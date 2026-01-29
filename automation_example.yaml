@@ -34,7 +34,7 @@ actions:
             value_template: "{{ has_holiday }}"
         sequence:
           - data:
-              node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+              node_id: abcd1234-ab23-ab32-ab99-abcdef12345
               day: "{{ tomorrow_day_name }}"
               profile: holiday
             action: hive_schedule.set_day_schedule
@@ -47,7 +47,7 @@ actions:
             value_template: "{{ has_nonworkday }}"
         sequence:
           - data:
-              node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+              node_id: abcd1234-ab23-ab32-ab99-abcdef12345
               day: "{{ tomorrow_day_name }}"
               profile: nonworkday
             action: hive_schedule.set_day_schedule
@@ -60,7 +60,7 @@ actions:
             value_template: "{{ has_workday }}"
         sequence:
           - data:
-              node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+              node_id: abcd1234-ab23-ab32-ab99-abcdef12345
               day: "{{ tomorrow_day_name }}"
               profile: workday
             action: hive_schedule.set_day_schedule
@@ -73,7 +73,7 @@ actions:
             value_template: "{{ tomorrow_day in [0, 1, 2, 3] }}"
         sequence:
           - data:
-              node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+              node_id: abcd1234-ab23-ab32-ab99-abcdef12345
               day: "{{ tomorrow_day_name }}"
               profile: workday
             action: hive_schedule.set_day_schedule
@@ -86,7 +86,7 @@ actions:
             value_template: "{{ tomorrow_day == 4 }}"
         sequence:
           - data:
-              node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+              node_id: abcd1234-ab23-ab32-ab99-abcdef12345
               day: "{{ tomorrow_day_name }}"
               profile: nonworkday
             action: hive_schedule.set_day_schedule
@@ -96,7 +96,7 @@ actions:
             action: notify.pushover
     default:
       - data:
-          node_id: d2708e98-f22f-483e-b590-9ddbd642a3b7
+          node_id: abcd1234-ab23-ab32-ab99-abcdef12345
           day: "{{ tomorrow_day_name }}"
           profile: weekend
         action: hive_schedule.set_day_schedule

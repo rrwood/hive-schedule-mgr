@@ -1,4 +1,6 @@
-"""Config flow for Hive Schedule Manager integration."""
+"""Config flow for Hive Schedule Manager integration.
+Version: 1.0.1
+"""
 from __future__ import annotations
 
 import logging

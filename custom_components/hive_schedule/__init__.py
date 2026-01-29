@@ -1,6 +1,6 @@
 """
 Hive Schedule Manager Integration for Home Assistant
-Version: 1.1.17 (Production - POST only, YAML profiles)
+Version: 1.0.1 (Can Update schedules and has working 2FA)
 """
 from __future__ import annotations
 
