@@ -8,8 +8,10 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/rrwood/hive-schedule-manager/issues",
   "requirements": [
-    "pycognito==2024.5.1",
-    "aiofiles==24.1.0"
+    "pycognito>=2024.5.1",
+    "requests>=2.31.0",
+    "aiofiles>=24.1.0"
   ],
-  "version": "1.0.5"
+  "version": "1.0.6"
 }
+
