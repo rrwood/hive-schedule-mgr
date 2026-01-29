@@ -12,6 +12,6 @@
     "requests>=2.31.0",
     "aiofiles>=24.1.0"
   ],
-  "version": "1.0.7"
+  "version": "1.0.8"
 }
 

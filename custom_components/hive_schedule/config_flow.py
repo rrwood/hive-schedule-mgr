@@ -246,8 +246,25 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.info("MFA verification successful - tokens received")
                 auth_result = response['AuthenticationResult']
                 
-                # Confirm device for long-lived refresh tokens
-                device_info = self._confirm_device(auth_result['AccessToken'])
+                # Check if device tracking is enabled (NewDeviceMetadata present)
+                device_info = {}
+                if 'NewDeviceMetadata' in auth_result:
+                    device_metadata = auth_result['NewDeviceMetadata']
+                    device_key = device_metadata.get('DeviceKey')
+                    device_group_key = device_metadata.get('DeviceGroupKey')
+                    
+                    if device_key:
+                        _LOGGER.debug("New device detected: %s", device_key[:20] + "...")
+                        # Confirm device for long-lived refresh tokens
+                        device_info = self._confirm_device(
+                            auth_result['AccessToken'],
+                            device_key,
+                            device_group_key
+                        )
+                    else:
+                        _LOGGER.warning("NewDeviceMetadata present but no DeviceKey found")
+                else:
+                    _LOGGER.debug("No NewDeviceMetadata in auth response - device tracking may not be enabled")
                 
                 return {
                     "success": True,
@@ -272,36 +289,39 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             _LOGGER.exception("Unexpected error during MFA verification: %s", err)
             return {"success": False}
     
-    def _confirm_device(self, access_token: str) -> dict[str, str]:
+    def _confirm_device(self, access_token: str, device_key: str, device_group_key: str = None) -> dict[str, str]:
         """Confirm device with Cognito to enable long-lived refresh tokens."""
         try:
             client = self._cognito.client
             
-            # Confirm the device
+            # Confirm the device with the device key from auth response
             _LOGGER.debug("Confirming device for trusted status...")
             confirm_response = client.confirm_device(
                 AccessToken=access_token,
+                DeviceKey=device_key,
                 DeviceName="HomeAssistant-HiveSchedule"
             )
             
-            device_key = confirm_response.get('DeviceKey')
-            if device_key:
-                _LOGGER.info("✓ Device confirmed as trusted: %s", device_key[:20] + "...")
-                return {
-                    'device_key': device_key,
-                    'device_group_key': confirm_response.get('DeviceGroupKey', ''),
-                }
-            else:
-                _LOGGER.warning("Device confirmation succeeded but no device key returned")
-                return {}
+            # Device confirmation successful
+            user_confirmation_necessary = confirm_response.get('UserConfirmationNecessary', False)
+            _LOGGER.info("✓ Device confirmed as trusted: %s", device_key[:20] + "...")
+            if user_confirmation_necessary:
+                _LOGGER.info("Note: User confirmation may be required in Hive app")
+            
+            return {
+                'device_key': device_key,
+                'device_group_key': device_group_key or '',
+            }
                 
         except ClientError as e:
             error_code = e.response.get("Error", {}).get("Code", "")
+            error_msg = e.response.get("Error", {}).get("Message", "")
             # Device confirmation is optional - log but don't fail
-            _LOGGER.warning("Could not confirm device (non-fatal): %s", error_code)
+            _LOGGER.warning("Could not confirm device (non-fatal): %s - %s", error_code, error_msg)
             return {}
         except Exception as e:
             _LOGGER.warning("Device confirmation failed (non-fatal): %s", e)
+            _LOGGER.debug("Device confirmation error details", exc_info=True)
             return {}
 
 
