@@ -329,13 +329,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         # Get token for API call - authenticate if needed
         try:
+            _LOGGER.debug("Checking for existing tokens...")
+            _LOGGER.debug("hasattr(hive.session, 'tokens'): %s", hasattr(hive.session, 'tokens'))
+            if hasattr(hive.session, 'tokens'):
+                _LOGGER.debug("hive.session.tokens: %s", hive.session.tokens)
+            
             # Check if we have tokens
             if not hasattr(hive.session, 'tokens') or not hive.session.tokens:
-                _LOGGER.debug("No tokens available, authenticating...")
+                _LOGGER.info("No tokens available, authenticating...")
                 
                 # Use Auth to login with credentials
                 auth = Auth(hive.session.username, hive.session.password)
                 tokens = await auth.login()
+                
+                _LOGGER.debug("Auth.login() returned: %s", tokens)
                 
                 if tokens and tokens.get("ChallengeName") == "SMS_MFA":
                     _LOGGER.error("MFA required but not available in service call")
@@ -343,19 +350,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 
                 # Transfer tokens to session
                 hive.session.tokens = tokens
-                _LOGGER.debug("Authenticated successfully")
+                _LOGGER.info("Authenticated successfully, tokens stored")
             
             # Extract token from session
             token = None
+            _LOGGER.debug("Extracting token from session.tokens...")
             if hasattr(hive.session, 'tokens') and hive.session.tokens:
+                _LOGGER.debug("session.tokens type: %s", type(hive.session.tokens))
                 # Try different token locations
                 if isinstance(hive.session.tokens, dict):
+                    _LOGGER.debug("session.tokens keys: %s", list(hive.session.tokens.keys()))
                     token = hive.session.tokens.get('IdToken') or hive.session.tokens.get('AccessToken')
+                    _LOGGER.debug("Extracted token: %s", token[:20] if token else None)
                 elif isinstance(hive.session.tokens, str):
                     token = hive.session.tokens
+                    _LOGGER.debug("Token is string, length: %s", len(token))
             
             if not token:
                 _LOGGER.error("Could not extract authentication token")
+                _LOGGER.error("session.tokens value: %s", hive.session.tokens if hasattr(hive.session, 'tokens') else "attribute missing")
                 raise HomeAssistantError("No authentication token available")
             
             # Make direct HTTP request to schedule API
