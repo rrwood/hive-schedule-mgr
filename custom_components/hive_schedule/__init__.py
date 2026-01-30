@@ -255,42 +255,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websession = aiohttp_client.async_get_clientsession(hass)
     
     try:
-        # Create Auth instance and login
-        auth = Auth(username, password)
-        login_result = await auth.login()
+        # Create Hive instance
+        hive = Hive(websession=websession)
+        
+        # Set credentials on session
+        hive.session.username = username
+        hive.session.password = password
+        
+        # Login via session (handles auth internally)
+        login_result = await hive.session.login()
         
         if not login_result:
             _LOGGER.error("Failed to login to Hive")
             return False
         
-        _LOGGER.debug("Login result: %s", login_result)
-        _LOGGER.debug("Auth attributes: %s", [a for a in dir(auth) if not a.startswith('_')])
-        
-        # Create Hive instance
-        hive = Hive(websession=websession)
-        
-        # Debug: what's in auth?
-        if hasattr(auth, 'tokenData'):
-            _LOGGER.debug("auth.tokenData exists: %s", type(auth.tokenData))
-        if hasattr(auth, 'token'):
-            _LOGGER.debug("auth.token exists")
-        
-        # Try to transfer auth data to Hive session
-        # Method 1: tokenData
-        if hasattr(auth, 'tokenData') and auth.tokenData:
-            _LOGGER.debug("Transferring tokenData to session")
-            hive.session.tokenData = auth.tokenData
-        
-        # Method 2: Direct token transfer
-        if hasattr(auth, 'token'):
-            _LOGGER.debug("Transferring token to session")
-            hive.session.token = auth.token
-        
-        # Debug session before startSession
-        _LOGGER.debug("Session attributes before startSession: %s", [a for a in dir(hive.session) if not a.startswith('_')])
-        
-        # Start session with authenticated tokens
-        await hive.session.startSession()
+        _LOGGER.debug("Session login result: %s", login_result)
         
         _LOGGER.info("✓ Successfully authenticated with Hive")
         _LOGGER.info("✓ apyhiveapi managing tokens (30-day lifetime)")
