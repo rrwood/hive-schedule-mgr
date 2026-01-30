@@ -1,6 +1,6 @@
 """
 Hive Schedule Manager Integration for Home Assistant
-Dynamic version loaded from manifest.json
+
 """
 from __future__ import annotations
 
@@ -551,7 +551,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     _LOGGER.info("=" * 80)
     _LOGGER.info("Hive Schedule Manager v%s", VERSION)
-    _LOGGER.info("POST-based schedule updates with YAML profiles")
+    _LOGGER.info("Integration to update Hive heating profiles")
     _LOGGER.info("=" * 80)
     
     # Initialize authentication and API
