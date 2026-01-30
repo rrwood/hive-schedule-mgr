@@ -242,27 +242,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("Using official Hive integration for authentication")
     _LOGGER.info("=" * 80)
     
-    # Debug: Check what's in hass.data
-    _LOGGER.debug("Available domains in hass.data: %s", list(hass.data.keys()))
-    
-    # Check if official Hive integration is loaded
+    # Wait for Hive integration to be ready
     if "hive" not in hass.data:
-        _LOGGER.error("'hive' not found in hass.data!")
-        _LOGGER.info("Checking config entries for Hive integration...")
+        _LOGGER.info("Waiting for Hive integration to load...")
         
-        # Check config entries
+        # Check if it's configured
         hive_entries = [
-            entry for entry in hass.config_entries.async_entries()
-            if entry.domain == "hive"
+            e for e in hass.config_entries.async_entries()
+            if e.domain == "hive"
         ]
         
-        if hive_entries:
-            _LOGGER.warning("Hive integration is configured but not loaded in hass.data yet")
-            _LOGGER.warning("This might be a race condition - try reloading the integration")
-        else:
-            _LOGGER.error("No Hive integration found in config entries either!")
+        if not hive_entries:
+            _LOGGER.error("No Hive integration found in config entries!")
+            return False
         
-        return False
+        # Wait for hive data to be available (up to 30 seconds)
+        import asyncio
+        for i in range(30):
+            await asyncio.sleep(1)
+            if "hive" in hass.data:
+                _LOGGER.info("✓ Hive integration loaded after %d seconds", i + 1)
+                break
+        else:
+            _LOGGER.error("Timeout waiting for Hive integration to load")
+            return False
     
     _LOGGER.info("✓ Found 'hive' in hass.data")
     _LOGGER.debug("hass.data['hive'] keys: %s", list(hass.data["hive"].keys()) if isinstance(hass.data["hive"], dict) else "not a dict")
