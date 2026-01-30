@@ -263,12 +263,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.error("Failed to login to Hive")
             return False
         
+        _LOGGER.debug("Login result: %s", login_result)
+        _LOGGER.debug("Auth attributes: %s", [a for a in dir(auth) if not a.startswith('_')])
+        
         # Create Hive instance
         hive = Hive(websession=websession)
         
-        # Transfer auth tokens to Hive session
+        # Debug: what's in auth?
         if hasattr(auth, 'tokenData'):
+            _LOGGER.debug("auth.tokenData exists: %s", type(auth.tokenData))
+        if hasattr(auth, 'token'):
+            _LOGGER.debug("auth.token exists")
+        
+        # Try to transfer auth data to Hive session
+        # Method 1: tokenData
+        if hasattr(auth, 'tokenData') and auth.tokenData:
+            _LOGGER.debug("Transferring tokenData to session")
             hive.session.tokenData = auth.tokenData
+        
+        # Method 2: Direct token transfer
+        if hasattr(auth, 'token'):
+            _LOGGER.debug("Transferring token to session")
+            hive.session.token = auth.token
+        
+        # Debug session before startSession
+        _LOGGER.debug("Session attributes before startSession: %s", [a for a in dir(hive.session) if not a.startswith('_')])
         
         # Start session with authenticated tokens
         await hive.session.startSession()
