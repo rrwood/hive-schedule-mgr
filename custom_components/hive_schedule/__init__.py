@@ -385,12 +385,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 _LOGGER.debug("tokenData keys: %s", list(token_data.keys()) if isinstance(token_data, dict) else "not a dict")
                 
                 if isinstance(token_data, dict):
-                    # Try different token keys
-                    token = (token_data.get('IdToken') or 
-                            token_data.get('AccessToken') or
+                    # Try AccessToken first (for API calls), then IdToken
+                    token = (token_data.get('AuthenticationResult', {}).get('AccessToken') or
                             token_data.get('AuthenticationResult', {}).get('IdToken') or
-                            token_data.get('AuthenticationResult', {}).get('AccessToken'))
-                    _LOGGER.debug("Extracted token: %s", token[:20] + "..." if token else None)
+                            token_data.get('AccessToken') or 
+                            token_data.get('IdToken'))
+                    _LOGGER.debug("Extracted token (AccessToken preferred): %s", token[:20] + "..." if token else None)
             
             if not token:
                 _LOGGER.error("Could not extract authentication token")
