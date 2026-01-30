@@ -26,6 +26,7 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._username = None
         self._password = None
         self._hive_auth = None
+        self._login_response = None  # Store login response for MFA
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -41,6 +42,9 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # Try to authenticate using apyhiveapi
                 self._hive_auth = Auth(self._username, self._password)
                 tokens = await self._hive_auth.login()
+                
+                # Store login response for MFA
+                self._login_response = tokens
                 
                 # Check if MFA is required
                 if tokens and tokens.get("ChallengeName") == "SMS_MFA":
@@ -77,18 +81,8 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             mfa_code = user_input[CONF_MFA_CODE]
 
             try:
-                # Complete MFA challenge
-                # Try different apyhiveapi signatures
-                try:
-                    # Method 1: Just MFA code
-                    await self._hive_auth.sms_2fa(mfa_code)
-                except TypeError:
-                    # Method 2: With session (might be stored differently)
-                    if hasattr(self._hive_auth, 'session'):
-                        await self._hive_auth.sms_2fa(mfa_code, self._hive_auth.session)
-                    else:
-                        # Method 3: Re-raise the original error
-                        raise
+                # Complete MFA challenge - need to pass the challenge_parameters from login
+                await self._hive_auth.sms_2fa(mfa_code, self._login_response)
                 
                 _LOGGER.info("MFA verification successful")
                 return await self._create_entry()
