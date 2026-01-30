@@ -341,11 +341,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Get token for API call - authenticate if needed
         try:
             _LOGGER.debug("Checking for existing tokens...")
-            _LOGGER.debug("hasattr(hive.session, 'tokens'): %s", hasattr(hive.session, 'tokens'))
-            if hasattr(hive.session, 'tokens'):
-                _LOGGER.debug("hive.session.tokens: %s", hive.session.tokens)
             
-            # Check if we have valid tokens
+            # Check if we have valid tokens and Hive session is established
             has_valid_tokens = False
             if hasattr(hive.session, 'tokens') and hive.session.tokens:
                 # Check if tokenData is populated
@@ -375,27 +372,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     _LOGGER.error("Unexpected token format: %s", type(tokens))
                     raise HomeAssistantError("Authentication returned unexpected format")
             
-            # Extract token from tokenData
-            token = None
-            _LOGGER.debug("Extracting token from session.tokens.tokenData...")
+            # CRITICAL: Initialize Hive session to get actual Hive API token
+            # This exchanges Cognito tokens for Hive-specific API token
+            _LOGGER.info("Initializing Hive session to get API token...")
+            await hive.session.updateData()
             
-            if hasattr(hive.session, 'tokens') and hive.session.tokens:
-                token_data = hive.session.tokens.get('tokenData', {})
-                _LOGGER.debug("tokenData type: %s", type(token_data))
-                _LOGGER.debug("tokenData keys: %s", list(token_data.keys()) if isinstance(token_data, dict) else "not a dict")
-                
-                if isinstance(token_data, dict):
-                    # Try AccessToken first (for API calls), then IdToken
-                    token = (token_data.get('AuthenticationResult', {}).get('AccessToken') or
-                            token_data.get('AuthenticationResult', {}).get('IdToken') or
-                            token_data.get('AccessToken') or 
-                            token_data.get('IdToken'))
-                    _LOGGER.debug("Extracted token (AccessToken preferred): %s", token[:20] + "..." if token else None)
+            # Now extract the REAL Hive API token (not Cognito token!)
+            token = None
+            
+            # Try different possible locations for Hive API token
+            if hasattr(hive.session, 'token') and hive.session.token:
+                token = hive.session.token
+                _LOGGER.debug("Found hive.session.token")
+            elif hasattr(hive.session, 'api_token') and hive.session.api_token:
+                token = hive.session.api_token
+                _LOGGER.debug("Found hive.session.api_token")
+            elif hasattr(hive.session, 'session') and isinstance(hive.session.session, dict):
+                token = hive.session.session.get('token') or hive.session.session.get('api_token')
+                _LOGGER.debug("Found token in hive.session.session dict")
             
             if not token:
-                _LOGGER.error("Could not extract authentication token")
-                _LOGGER.error("Full tokenData: %s", hive.session.tokens.get('tokenData') if hasattr(hive.session, 'tokens') else "no tokens")
-                raise HomeAssistantError("No authentication token available")
+                _LOGGER.error("Could not extract Hive API token after updateData()")
+                _LOGGER.error("Session attributes: %s", [a for a in dir(hive.session) if not a.startswith('_')])
+                raise HomeAssistantError("No Hive API token available")
             
             # Make direct HTTP request to schedule API
             url = f"https://beekeeper-uk.hivehome.com/1.0/nodes/{node_id}"
