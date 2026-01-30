@@ -282,13 +282,17 @@ class HiveAuth:
         else:
             self._token_expiry = None
     
-    def refresh_token(self) -> bool:
-        """Refresh the authentication token using refresh token."""
+    def refresh_token(self, force: bool = False) -> bool:
+        """Refresh the authentication token using refresh token.
+        
+        Args:
+            force: If True, refresh even if token is still valid (for manual refresh)
+        """
         from botocore.exceptions import ClientError
         
         try:
-            # Check if we need to refresh
-            if self._token_expiry and datetime.now() < self._token_expiry - timedelta(minutes=5):
+            # Check if we need to refresh (skip check if force=True)
+            if not force and self._token_expiry and datetime.now() < self._token_expiry - timedelta(minutes=5):
                 _LOGGER.debug("Token still valid, no refresh needed")
                 return True
             
@@ -297,6 +301,8 @@ class HiveAuth:
                 return False
             
             _LOGGER.info("Refreshing authentication token...")
+            if force:
+                _LOGGER.debug("Forced refresh (manual call)")
             
             # Create Cognito instance with current tokens
             self._cognito = Cognito(
@@ -321,7 +327,8 @@ class HiveAuth:
             # Save updated tokens to config entry
             self._save_tokens()
             
-            _LOGGER.info("Successfully refreshed authentication token")
+            _LOGGER.info("Successfully refreshed authentication token (expires %s)", 
+                        self._token_expiry.strftime("%H:%M:%S"))
             return True
             
         except ClientError as e:
@@ -641,9 +648,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     # Add manual refresh service
     async def handle_refresh_token(call: ServiceCall) -> None:
-        """Manually refresh authentication tokens."""
-        _LOGGER.info("Manual token refresh requested")
-        success = await hass.async_add_executor_job(auth.refresh_token)
+        """Manually refresh authentication tokens - always forces refresh."""
+        _LOGGER.info("Manual token refresh requested (forced)")
+        success = await hass.async_add_executor_job(auth.refresh_token, True)  # force=True
         if success:
             _LOGGER.info("✓ Token refresh successful")
         else:
