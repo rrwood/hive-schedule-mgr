@@ -1,6 +1,6 @@
 """
 Hive Schedule Manager Integration for Home Assistant v2.0
-Depends on official Hive integration for authentication
+Standalone version using apyhiveapi (bundled with Home Assistant)
 """
 from __future__ import annotations
 
@@ -14,10 +14,15 @@ import voluptuous as vol
 import yaml
 import aiofiles
 
+# apyhiveapi is bundled with Home Assistant (used by official Hive integration)
+from apyhiveapi import Hive
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
+from homeassistant.const import CONF_USERNAME, CONF_PASSWORD
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import aiohttp_client
 
 from .const import (
     DOMAIN,
@@ -239,93 +244,43 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     _LOGGER.info("=" * 80)
     _LOGGER.info("Hive Schedule Manager v%s", VERSION)
-    _LOGGER.info("Using official Hive integration for authentication")
+    _LOGGER.info("Standalone with apyhiveapi authentication")
     _LOGGER.info("=" * 80)
     
-    # Find Hive config entry
-    hive_entries = [
-        e for e in hass.config_entries.async_entries()
-        if e.domain == "hive"
-    ]
+    # Get credentials
+    username = entry.data[CONF_USERNAME]
+    password = entry.data[CONF_PASSWORD]
     
-    if not hive_entries:
-        _LOGGER.error("No Hive integration found in config entries!")
-        return False
+    # Get aiohttp session
+    websession = aiohttp_client.async_get_clientsession(hass)
     
-    hive_entry = hive_entries[0]
-    hive_entry_id = hive_entry.entry_id
-    _LOGGER.info("✓ Found Hive config entry: %s", hive_entry_id)
+    # Create Hive instance (apyhiveapi handles all token management!)
+    hive = Hive(websession=websession)
     
-    # Wait for Hive integration to populate hass.data["hive"][entry_id]
-    # This is how the official integration stores its API object
-    import asyncio
-    hive_api = None
-    
-    for attempt in range(30):
-        # Check if hass.data["hive"] exists
-        if "hive" in hass.data:
-            # Check if our specific entry is loaded
-            if hive_entry_id in hass.data["hive"]:
-                hive_data = hass.data["hive"][hive_entry_id]
-                _LOGGER.debug("Found hive_data for entry, type: %s", type(hive_data))
-                
-                # Official integration stores as: hass.data["hive"][entry_id]["hive"]
-                if isinstance(hive_data, dict) and "hive" in hive_data:
-                    hive_api = hive_data["hive"]
-                    _LOGGER.info("✓ Found Hive API after %d seconds", attempt + 1)
-                    break
-                else:
-                    _LOGGER.debug("hive_data structure: %s", hive_data.keys() if isinstance(hive_data, dict) else "not a dict")
+    try:
+        # Login - apyhiveapi handles tokens, refresh, device registration automatically
+        login_success = await hive.session.login(username, password)
         
-        _LOGGER.debug("Waiting for Hive integration... (attempt %d/30)", attempt + 1)
-        await asyncio.sleep(1)
-    
-    if not hive_api:
-        _LOGGER.error("Timeout waiting for Hive API to be available")
-        _LOGGER.error("Expected: hass.data['hive']['%s']['hive']", hive_entry_id)
-        _LOGGER.error("'hive' in hass.data: %s", "hive" in hass.data)
-        if "hive" in hass.data:
-            _LOGGER.error("Keys in hass.data['hive']: %s", list(hass.data["hive"].keys()))
-        return False
-    
-    _LOGGER.info("✓ Successfully connected to Hive API")
-    
-    # Extract authentication tokens from Hive API
-    # The Hive object has a session with tokens we can use
-    auth_tokens = None
-    
-    if hasattr(hive_api, 'session'):
-        session = hive_api.session
-        _LOGGER.debug("Found session object: %s", type(session))
+        if not login_success:
+            _LOGGER.error("Failed to login to Hive")
+            return False
         
-        # Try to get tokens from session
-        if hasattr(session, 'token'):
-            auth_tokens = {"token": session.token}
-            _LOGGER.info("✓ Extracted auth token from Hive session")
-        elif hasattr(session, 'tokenData'):
-            auth_tokens = session.tokenData
-            _LOGGER.info("✓ Extracted tokenData from Hive session")
-        elif hasattr(session, 'auth'):
-            auth_tokens = session.auth
-            _LOGGER.info("✓ Extracted auth from Hive session")
-        else:
-            _LOGGER.debug("Session attributes: %s", [a for a in dir(session) if not a.startswith('_')])
-    
-    if not auth_tokens:
-        _LOGGER.error("Could not extract authentication tokens from Hive API")
+        _LOGGER.info("✓ Successfully authenticated with Hive")
+        _LOGGER.info("✓ apyhiveapi managing tokens (30-day lifetime)")
+        
+    except Exception as e:
+        _LOGGER.error("Authentication failed: %s", e)
+        _LOGGER.debug("Auth error details", exc_info=True)
         return False
-    
-    _LOGGER.debug("Auth tokens type: %s", type(auth_tokens))
     
     # Load profiles
     profiles = await _load_profiles(hass)
     _LOGGER.info("Loaded %d schedule profiles", len(profiles))
     
-    # Store data
+    # Store Hive instance
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
-        "hive_api": hive_api,
-        "auth_tokens": auth_tokens,
+        "hive": hive,
         "profiles": profiles,
     }
     
@@ -374,48 +329,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             }
         }
         
-        # Get authentication tokens
-        auth_tokens = hass.data[DOMAIN][entry.entry_id]["auth_tokens"]
-        
-        # Build authorization header from tokens
-        if isinstance(auth_tokens, dict) and "token" in auth_tokens:
-            token = auth_tokens["token"]
-        elif hasattr(auth_tokens, 'token'):
-            token = auth_tokens.token
-        else:
-            # Try to extract token string
-            token = str(auth_tokens)
-        
-        _LOGGER.debug("Using token for API call")
-        
-        # Make direct HTTP request to Hive API (like v1.x but with official tokens)
-        import aiohttp
-        
-        url = f"https://beekeeper-uk.hivehome.com/1.0/nodes/{node_id}"
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "authorization": token,
-        }
-        
-        _LOGGER.debug("POST %s", url)
-        _LOGGER.debug("Payload: %s", schedule_data)
-        
-        # Use Home Assistant's aiohttp session
-        from homeassistant.helpers import aiohttp_client
-        session = aiohttp_client.async_get_clientsession(hass)
-        
+        # Get token from Hive session for API call
         try:
-            async with session.post(url, json=schedule_data, headers=headers) as response:
+            # Extract token from session
+            if hasattr(hive.session, 'token'):
+                token = hive.session.token
+            elif hasattr(hive.session, 'tokenData') and isinstance(hive.session.tokenData, dict):
+                token = hive.session.tokenData.get('token') or hive.session.tokenData.get('IdToken')
+            else:
+                _LOGGER.error("Could not extract token from Hive session")
+                raise HomeAssistantError("No authentication token available")
+            
+            # Make direct HTTP request to schedule API
+            url = f"https://beekeeper-uk.hivehome.com/1.0/nodes/{node_id}"
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "authorization": token,
+            }
+            
+            _LOGGER.debug("POST %s", url)
+            
+            async with websession.post(url, json=schedule_data, headers=headers) as response:
                 if response.status == 200:
                     _LOGGER.info("✓ Successfully updated %s schedule", day)
                 else:
                     error_text = await response.text()
                     _LOGGER.error("API returned %d: %s", response.status, error_text)
-                    raise HomeAssistantError(f"API error {response.status}: {error_text}")
+                    raise HomeAssistantError(f"API error {response.status}")
                     
-        except aiohttp.ClientError as e:
-            _LOGGER.error("HTTP request failed: %s", e)
+        except Exception as e:
+            _LOGGER.error("Failed to update schedule: %s", e)
             raise HomeAssistantError(f"Failed to update schedule: {e}") from e
     
     hass.services.async_register(
