@@ -1,6 +1,6 @@
 """
-Hive Schedule Manager Integration for Home Assistant
-..
+Hive Schedule Manager Integration for Home Assistant v2.0
+Using apyhiveapi for proper authentication with 30-day tokens
 """
 from __future__ import annotations
 
@@ -11,32 +11,25 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import voluptuous as vol
-import requests
 import yaml
-from pycognito import Cognito
 import aiofiles
+from apyhiveapi import Auth, Hive
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
-from homeassistant.const import CONF_USERNAME, CONF_PASSWORD
+from homeassistant.const import CONF_USERNAME, CONF_PASSWORD, CONF_SCAN_INTERVAL
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.exceptions import HomeAssistantError
 
 from .const import (
     DOMAIN,
-    COGNITO_POOL_ID,
-    COGNITO_CLIENT_ID,
-    COGNITO_REGION,
     SERVICE_SET_DAY,
     ATTR_NODE_ID,
     ATTR_DAY,
     ATTR_SCHEDULE,
     ATTR_PROFILE,
-    CONF_ID_TOKEN,
-    CONF_ACCESS_TOKEN,
-    CONF_REFRESH_TOKEN,
-    CONF_TOKEN_EXPIRY,
+    CONF_TOKENS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,17 +46,17 @@ def _get_version() -> str:
         return 'unknown'
 
 VERSION = _get_version()
-DEFAULT_SCAN_INTERVAL = timedelta(minutes=30)
+DEFAULT_SCAN_INTERVAL = timedelta(hours=1)  # apyhiveapi handles token refresh
 PROFILES_FILE = "hive_schedule_profiles.yaml"
 
-# Service schema - profile validation at runtime
+# Service schema
 SET_DAY_SCHEMA = vol.Schema({
     vol.Required(ATTR_NODE_ID): cv.string,
     vol.Required(ATTR_DAY): vol.In([
         "monday", "tuesday", "wednesday", "thursday", 
         "friday", "saturday", "sunday"
     ]),
-    vol.Optional(ATTR_PROFILE): cv.string,  # Validated at runtime
+    vol.Optional(ATTR_PROFILE): cv.string,
     vol.Optional(ATTR_SCHEDULE): vol.All(cv.ensure_list, [{
         vol.Required("time"): cv.string,
         vol.Required("temp"): vol.Coerce(float),
@@ -75,7 +68,6 @@ async def _load_profiles(hass: HomeAssistant) -> dict:
     """Load schedule profiles from YAML file asynchronously."""
     config_path = hass.config.path(PROFILES_FILE)
     
-    # Create default profiles file if it doesn't exist
     if not os.path.exists(config_path):
         _LOGGER.info("Creating default profiles file: %s", config_path)
         await _create_default_profiles_file(config_path)
@@ -135,37 +127,32 @@ def _get_builtin_profiles() -> dict:
     }
 
 
-async def _create_default_profiles_file(config_path: str) -> None:
-    """Create default profiles YAML file asynchronously."""
+async def _create_default_profiles_file(config_path: str):
+    """Create default profiles file with examples."""
     default_content = """# Hive Schedule Profiles
-# Edit this file to customize your heating schedules
-# After editing, changes take effect on the next service call (no restart needed)
-# Time format: "HH:MM" (24-hour)
-# Temperature: Celsius (5.0 - 32.0)
+# Each profile is a list of time/temp pairs for one day
+# Times in 24-hour format (HH:MM), temperatures in Celsius
 
-# Standard weekday schedule (Mon-Thur)
 workday:
   - time: "05:20"
-    temp: 18.5  # Morning warmup
+    temp: 18.5
   - time: "07:00"
-    temp: 18.0  # Away during day
+    temp: 18.0
   - time: "16:30"
-    temp: 19.5  # Evening warmup
+    temp: 19.5
   - time: "21:45"
-    temp: 16.0  # Night setback
+    temp: 16.0
 
-# Weekend schedule
 weekend:
   - time: "07:30"
-    temp: 18.5  # Later morning warmup
+    temp: 18.5
   - time: "09:00"
-    temp: 18.0  # Comfortable day temperature
+    temp: 18.0
   - time: "16:30"
-    temp: 19.5  # Evening warmup
+    temp: 19.5
   - time: "22:00"
-    temp: 16.0  # Later night setback
+    temp: 16.0
 
-# Non working weekday, later start
 nonworkday:
   - time: "06:30"
     temp: 18.5
@@ -176,17 +163,14 @@ nonworkday:
   - time: "22:00"
     temp: 16.0
 
-# Away/vacation mode (frost protection)
 holiday:
   - time: "00:00"
     temp: 15.0
 
-# All day comfort (constant temperature)
 all_day_comfort:
   - time: "00:00"
     temp: 19.0
 
-# Custom profile 1 (5 states)
 custom1:
   - time: "05:30"
     temp: 17.0
@@ -199,7 +183,6 @@ custom1:
   - time: "22:30"
     temp: 16.0
 
-# Custom profile 2 (5 states)
 custom2:
   - time: "06:00"
     temp: 18.0
@@ -256,395 +239,139 @@ def _validate_schedule(schedule: list) -> bool:
     return True
 
 
-class HiveAuth:
-    """Handle Hive authentication via AWS Cognito."""
+class HiveScheduleAPI:
+    """API client for Hive heating schedules using apyhiveapi."""
     
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        """Initialize Hive authentication."""
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
+        """Initialize the API client."""
         self.hass = hass
         self.entry = entry
-        self.username = entry.data[CONF_USERNAME]
-        self.password = entry.data[CONF_PASSWORD]
-        self._cognito = None
+        self._hive = None
+        self._session = None
         
-        # Load tokens from config entry
-        self._id_token = entry.data.get(CONF_ID_TOKEN)
-        self._access_token = entry.data.get(CONF_ACCESS_TOKEN)
-        self._refresh_token = entry.data.get(CONF_REFRESH_TOKEN)
-        
-        # Parse token expiry
-        expiry_str = entry.data.get(CONF_TOKEN_EXPIRY)
-        if expiry_str:
-            try:
-                self._token_expiry = datetime.fromisoformat(expiry_str)
-                time_until_expiry = (self._token_expiry - datetime.now()).total_seconds() / 60
-                _LOGGER.info(
-                    "Tokens loaded - expire at %s (%.1f minutes from now)",
-                    self._token_expiry.strftime("%H:%M:%S"),
-                    time_until_expiry
-                )
-            except (ValueError, TypeError):
-                self._token_expiry = None
-                _LOGGER.warning("Could not parse token expiry time")
-        else:
-            self._token_expiry = None
-            _LOGGER.warning("No token expiry time found in config entry")
-    
-    def refresh_token(self, force: bool = False) -> bool:
-        """Refresh the authentication token using refresh token.
-        
-        Args:
-            force: If True, refresh even if token is still valid (for manual refresh)
-        """
-        from botocore.exceptions import ClientError
+    async def async_setup(self) -> bool:
+        """Set up the Hive API connection."""
+        username = self.entry.data[CONF_USERNAME]
+        password = self.entry.data[CONF_PASSWORD]
         
         try:
-            # Check if we need to refresh (skip check if force=True)
-            if not force and self._token_expiry and datetime.now() < self._token_expiry - timedelta(minutes=5):
-                _LOGGER.debug("Token still valid, no refresh needed")
+            # Initialize Hive API
+            self._session = Auth(username, password)
+            self._hive = Hive(self._session)
+            
+            # Login and get tokens
+            login_result = await self._session.login()
+            
+            if login_result.get("ChallengeName") == "SMS_MFA":
+                _LOGGER.error("MFA challenge received - this should be handled in config flow")
+                return False
+            
+            _LOGGER.info("✓ Successfully authenticated with Hive (tokens valid for 30 days)")
+            
+            # Start session to initialize connection
+            await self._hive.session.startSession()
+            
+            return True
+            
+        except Exception as e:
+            _LOGGER.error("Failed to authenticate with Hive: %s", e)
+            return False
+    
+    async def async_update_schedule(self, node_id: str, day: str, schedule: list) -> bool:
+        """Update schedule for a specific day."""
+        try:
+            # Convert schedule to Hive format
+            hive_schedule = []
+            for entry in schedule:
+                # Convert HH:MM to minutes from midnight
+                hours, minutes = entry["time"].split(":")
+                minutes_from_midnight = int(hours) * 60 + int(minutes)
+                
+                hive_schedule.append({
+                    "value": {"target": entry["temp"]},
+                    "start": minutes_from_midnight
+                })
+            
+            # Update only the specified day
+            schedule_data = {
+                "schedule": {
+                    day: hive_schedule
+                }
+            }
+            
+            _LOGGER.debug("Updating schedule for %s: %s", day, schedule_data)
+            
+            # Use apyhiveapi's heating module
+            result = await self._hive.heating.setSchedule(node_id, schedule_data)
+            
+            if result:
+                _LOGGER.info("✓ Successfully updated %s schedule for node %s", day, node_id)
                 return True
-            
-            if not self._refresh_token:
-                _LOGGER.warning("No refresh token available, need full re-authentication")
-                return False
-            
-            _LOGGER.info("Refreshing authentication token...")
-            if force:
-                _LOGGER.debug("Forced refresh (manual call)")
-            
-            # Create Cognito instance with current tokens
-            self._cognito = Cognito(
-                user_pool_id=COGNITO_POOL_ID,
-                client_id=COGNITO_CLIENT_ID,
-                user_pool_region=COGNITO_REGION,
-                username=self.username,
-                id_token=self._id_token,
-                access_token=self._access_token,
-                refresh_token=self._refresh_token,
-            )
-            
-            # Refresh tokens using pycognito
-            try:
-                self._cognito.renew_access_token()
-            except Exception as renew_error:
-                _LOGGER.error("renew_access_token() failed: %s", renew_error)
-                raise
-            
-            # Verify we actually got new tokens
-            if not self._cognito.id_token or not self._cognito.access_token:
-                _LOGGER.error("Token refresh succeeded but no new tokens returned!")
-                return False
-            
-            # Update stored tokens
-            self._id_token = self._cognito.id_token
-            self._access_token = self._cognito.access_token
-            
-            # Check if refresh token was rotated (Cognito may issue new refresh token)
-            if hasattr(self._cognito, 'refresh_token') and self._cognito.refresh_token:
-                if self._cognito.refresh_token != self._refresh_token:
-                    _LOGGER.info("✓ New refresh token issued by Cognito (token rotation)")
-                    self._refresh_token = self._cognito.refresh_token
-                else:
-                    _LOGGER.debug("Refresh token unchanged (no rotation - this is the problem!)")
             else:
-                _LOGGER.warning("No refresh_token attribute on Cognito object after renewal")
-            
-            self._token_expiry = datetime.now() + timedelta(minutes=55)
-            
-            # Save updated tokens to config entry
-            self._save_tokens()
-            
-            _LOGGER.info("Successfully refreshed ID/Access tokens (expire %s)", 
-                        self._token_expiry.strftime("%H:%M:%S"))
-            _LOGGER.warning(
-                "NOTE: Refresh token itself may have fixed lifetime from initial login. "
-                "If it expires, you'll need to reconfigure with MFA."
-            )
-            return True
-            
-        except ClientError as e:
-            error_code = e.response.get("Error", {}).get("Code", "")
-            
-            # Handle invalid refresh token - requires full re-authentication
-            if error_code == "NotAuthorizedException":
-                _LOGGER.error(
-                    "Refresh token is invalid or expired. "
-                    "Please reconfigure the integration to re-authenticate with MFA. "
-                    "Go to Settings -> Devices & Services -> Hive Schedule Manager -> Configure"
-                )
-                # Clear invalid tokens
-                self._id_token = None
-                self._access_token = None
-                self._refresh_token = None
-                self._token_expiry = None
-                return False
-            else:
-                _LOGGER.error("ClientError refreshing token: %s - %s", error_code, e)
-                _LOGGER.debug("Token refresh error details", exc_info=True)
+                _LOGGER.error("Failed to update schedule - API returned False")
                 return False
                 
-        except AttributeError as e:
-            _LOGGER.error("Failed to refresh token - AttributeError (missing token attributes): %s", e)
-            _LOGGER.debug("Token refresh error details", exc_info=True)
-            return False
         except Exception as e:
-            _LOGGER.error("Failed to refresh token: %s (type: %s)", e, type(e).__name__)
-            _LOGGER.debug("Token refresh error details", exc_info=True)
-            return False
+            _LOGGER.error("Error updating schedule: %s", e)
+            _LOGGER.debug("Schedule update error details", exc_info=True)
+            raise HomeAssistantError(f"Failed to update schedule: {e}") from e
     
-    def _save_tokens(self) -> None:
-        """Save tokens to config entry."""
-        try:
-            new_data = dict(self.entry.data)
-            new_data[CONF_ID_TOKEN] = self._id_token
-            new_data[CONF_ACCESS_TOKEN] = self._access_token
-            new_data[CONF_REFRESH_TOKEN] = self._refresh_token
-            new_data[CONF_TOKEN_EXPIRY] = self._token_expiry.isoformat() if self._token_expiry else None
-            
-            self.hass.config_entries.async_update_entry(self.entry, data=new_data)
-            _LOGGER.debug("Saved updated tokens to config entry")
-        except Exception as e:
-            _LOGGER.error("Failed to save tokens: %s", e)
-    
-    def get_id_token(self) -> str | None:
-        """Get the current ID token."""
-        if not self._id_token:
-            _LOGGER.error("No ID token available")
-            return None
-        
-        # Refresh if needed
-        self.refresh_token()
-        
-        return self._id_token
-
-
-class HiveScheduleAPI:
-    """API client for Hive Schedule operations using beekeeper-uk endpoint."""
-    
-    BASE_URL = "https://beekeeper-uk.hivehome.com/1.0"
-    
-    def __init__(self, auth: HiveAuth) -> None:
-        """Initialize the API client."""
-        self.auth = auth
-        self.session = requests.Session()
-        self.session.headers.update({
-            "Content-Type": "application/json",
-            "Accept": "*/*",
-            "Origin": "https://my.hivehome.com",
-            "Referer": "https://my.hivehome.com/"
-        })
-    
-    @staticmethod
-    def time_to_minutes(time_str: str) -> int:
-        """Convert time string to minutes from midnight."""
-        h, m = map(int, time_str.split(":"))
-        return h * 60 + m
-    
-    @staticmethod
-    def minutes_to_time(minutes: int) -> str:
-        """Convert minutes from midnight to time string."""
-        hours = minutes // 60
-        mins = minutes % 60
-        return f"{hours:02d}:{mins:02d}"
-    
-    def build_schedule_entry(self, time_str: str, temp: float) -> dict[str, Any]:
-        """Build a single schedule entry in beekeeper format."""
-        return {
-            "value": {"target": float(temp)},
-            "start": self.time_to_minutes(time_str)
-        }
-    
-    def _log_api_call(self, method: str, url: str, headers: dict, payload: dict | None = None) -> None:
-        """Log detailed API call information for debugging."""
-        _LOGGER.debug("=" * 80)
-        _LOGGER.debug("API CALL DEBUG INFO")
-        _LOGGER.debug("=" * 80)
-        _LOGGER.debug("Method: %s", method)
-        _LOGGER.debug("URL: %s", url)
-        _LOGGER.debug("-" * 80)
-        _LOGGER.debug("Headers:")
-        # Sanitize authorization header for logging
-        safe_headers = headers.copy()
-        if "Authorization" in safe_headers:
-            token = safe_headers["Authorization"]
-            if len(token) > 20:
-                safe_headers["Authorization"] = f"{token[:10]}...{token[-10:]}"
-        for key, value in safe_headers.items():
-            _LOGGER.debug("  %s: %s", key, value)
-        _LOGGER.debug("-" * 80)
-        if payload:
-            _LOGGER.debug("Payload (JSON):")
-            _LOGGER.debug("%s", json.dumps(payload, indent=2))
-        _LOGGER.debug("=" * 80)
-    
-    def _format_schedule_readable(self, schedule_data: dict, title: str = "SCHEDULE IN READABLE FORMAT") -> None:
-        """Format and log schedule data in a human-readable way."""
-        if not schedule_data or "schedule" not in schedule_data:
-            return
-        
-        schedule = schedule_data["schedule"]
-        
-        _LOGGER.info("=" * 80)
-        _LOGGER.info(title)
-        _LOGGER.info("=" * 80)
-        
-        for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]:
-            if day in schedule:
-                entries = schedule[day]
-                _LOGGER.info(f"{day.upper()}:")
-                for entry in entries:
-                    time_str = self.minutes_to_time(entry["start"])
-                    temp = entry["value"]["target"]
-                    _LOGGER.info(f"  {time_str} → {temp}°C")
-        
-        _LOGGER.info("=" * 80)
-    
-    def update_schedule(self, node_id: str, schedule_data: dict[str, Any]) -> bool:
-        """Send schedule update to Hive using beekeeper-uk API."""
-        # Get fresh token
-        token = self.auth.get_id_token()
-        
-        if not token:
-            _LOGGER.error("Cannot update schedule: No auth token available")
-            raise HomeAssistantError("Failed to authenticate with Hive")
-        
-        # Update session header with current token
-        self.session.headers["Authorization"] = token
-        
-        url = f"{self.BASE_URL}/nodes/heating/{node_id}"
-        
-        try:
-            # Log the API call details
-            self._log_api_call("POST", url, self.session.headers, schedule_data)
-            
-            _LOGGER.info("Sending schedule update to %s", url)
-            
-            response = self.session.post(url, json=schedule_data, timeout=30)
-            response.raise_for_status()
-            
-            _LOGGER.debug("Response status: %s", response.status_code)
-            _LOGGER.debug("Response text: %s", response.text[:2000] if hasattr(response, 'text') else 'no response')
-            
-            # Parse and format the response to show what was actually set
+    async def async_close(self):
+        """Close the API session."""
+        if self._hive:
             try:
-                response_data = response.json()
-                _LOGGER.info("Response from Hive API (showing what was set):")
-                self._format_schedule_readable(response_data, "UPDATED SCHEDULE (confirmed by Hive)")
+                await self._hive.session.close()
+                _LOGGER.debug("Closed Hive API session")
             except Exception as e:
-                _LOGGER.debug(f"Could not parse response for readable format: {e}")
-            
-            _LOGGER.info("✓ Successfully updated Hive schedule for node %s", node_id)
-            return True
-        except requests.exceptions.HTTPError as err:
-            if err.response.status_code == 401:
-                _LOGGER.error("Authentication failed (401)")
-                _LOGGER.error("Response: %s", err.response.text[:200] if hasattr(err.response, 'text') else 'no response')
-                
-                # Try to refresh token and retry once
-                _LOGGER.info("Attempting to refresh token and retry...")
-                if self.auth.refresh_token():
-                    token = self.auth.get_id_token()
-                    self.session.headers["Authorization"] = token
-                    try:
-                        self._log_api_call("POST", url, self.session.headers, schedule_data)
-                        response = self.session.post(url, json=schedule_data, timeout=30)
-                        response.raise_for_status()
-                        _LOGGER.info("✓ Successfully updated Hive schedule after token refresh")
-                        
-                        try:
-                            response_data = response.json()
-                            self._format_schedule_readable(response_data, "UPDATED SCHEDULE (confirmed by Hive)")
-                        except:
-                            pass
-                        
-                        return True
-                    except Exception as retry_err:
-                        _LOGGER.error("Retry failed: %s", retry_err)
-                
-                raise HomeAssistantError("Hive authentication failed") from err
-            if err.response.status_code == 404:
-                _LOGGER.error("Node ID not found: %s", node_id)
-                raise HomeAssistantError(f"Invalid node ID: {node_id}") from err
-            _LOGGER.error("HTTP error updating schedule: %s", err)
-            if hasattr(err.response, 'text'):
-                _LOGGER.error("Response: %s", err.response.text[:500])
-            raise HomeAssistantError(f"Failed to update schedule: {err}") from err
-        except requests.exceptions.Timeout as err:
-            _LOGGER.error("Request to Hive API timed out")
-            raise HomeAssistantError("Hive API request timed out") from err
-        except requests.exceptions.RequestException as err:
-            _LOGGER.error("Request error updating schedule: %s", err)
-            raise HomeAssistantError(f"Failed to update schedule: {err}") from err
+                _LOGGER.debug("Error closing session: %s", e)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Hive Schedule Manager from a config entry."""
     
     _LOGGER.info("=" * 80)
-    _LOGGER.info("Hive Schedule Manager v%s", VERSION)
-    _LOGGER.info("Update Hive Schedules from Automations")
+    _LOGGER.info("Hive Schedule Manager v%s (apyhiveapi)", VERSION)
+    _LOGGER.info("30-day token lifetime with automatic refresh")
     _LOGGER.info("=" * 80)
     
-    # Initialize authentication and API
-    auth = HiveAuth(hass, entry)
-    api = HiveScheduleAPI(auth)
+    # Initialize API
+    api = HiveScheduleAPI(hass, entry)
     
-    # Load profiles asynchronously
+    # Setup and authenticate
+    if not await api.async_setup():
+        _LOGGER.error("Failed to set up Hive API")
+        return False
+    
+    # Load profiles
     profiles = await _load_profiles(hass)
     _LOGGER.info("Loaded %d schedule profiles", len(profiles))
     
-    # Check if we have tokens
-    if not auth._id_token:
-        _LOGGER.warning("No authentication tokens found in config entry")
-    else:
-        _LOGGER.info("Loaded authentication tokens from config entry")
-        # Try to refresh token to ensure it's valid
-        await hass.async_add_executor_job(auth.refresh_token)
-    
-    # Store in hass.data
+    # Store API instance
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
-        "auth": auth,
         "api": api,
         "profiles": profiles,
     }
     
-    # Set up periodic token refresh
-    async def refresh_token_periodic(now=None):
-        """Periodically refresh the authentication token."""
-        await hass.async_add_executor_job(auth.refresh_token)
-    
-    entry.async_on_unload(
-        async_track_time_interval(hass, refresh_token_periodic, DEFAULT_SCAN_INTERVAL)
-    )
-    
-    # Service: Set day schedule
+    # Register service
     async def handle_set_day(call: ServiceCall) -> None:
-        """Handle set_day_schedule service call - updates only the specified day."""
+        """Handle set_day_schedule service call."""
         node_id = call.data[ATTR_NODE_ID]
-        day = call.data[ATTR_DAY].lower()
-        profile = call.data.get(ATTR_PROFILE)
+        day = call.data[ATTR_DAY]
+        profile_name = call.data.get(ATTR_PROFILE)
         custom_schedule = call.data.get(ATTR_SCHEDULE)
         
-        # Reload profiles to pick up any changes (async)
-        profiles = await _load_profiles(hass)
-        
-        # Determine which schedule to use
-        if profile and custom_schedule:
-            _LOGGER.warning("Both profile and schedule provided, using custom schedule")
-            day_schedule = custom_schedule
-        elif profile:
-            if profile not in profiles:
-                raise HomeAssistantError(f"Unknown profile '{profile}'. Available: {', '.join(profiles.keys())}")
-            _LOGGER.info("Using profile '%s' for %s", profile, day)
-            day_schedule = profiles[profile]
+        # Get schedule from profile or custom
+        if profile_name:
+            if profile_name not in profiles:
+                raise HomeAssistantError(f"Unknown profile: {profile_name}")
+            day_schedule = profiles[profile_name]
+            _LOGGER.info("Using profile '%s' for %s", profile_name, day)
         elif custom_schedule:
-            _LOGGER.info("Using custom schedule for %s", day)
             day_schedule = custom_schedule
+            _LOGGER.info("Using custom schedule for %s", day)
         else:
-            raise HomeAssistantError(
-                "Either 'profile' or 'schedule' must be provided"
-            )
+            raise HomeAssistantError("Either 'profile' or 'schedule' must be provided")
         
         # Validate schedule
         try:
@@ -654,47 +381,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         _LOGGER.info("Setting schedule for %s on node %s", day, node_id)
         
-        # Build schedule with ONLY the selected day (beekeeper format)
-        schedule_data = {
-            "schedule": {
-                day: [
-                    api.build_schedule_entry(entry["time"], entry["temp"])
-                    for entry in day_schedule
-                ]
-            }
-        }
-        
-        # Send updated schedule to Hive
-        await hass.async_add_executor_job(api.update_schedule, node_id, schedule_data)
+        # Update schedule
+        await api.async_update_schedule(node_id, day, day_schedule)
         
         _LOGGER.info("Successfully updated %s schedule", day)
     
-    # Register service
     hass.services.async_register(
         DOMAIN,
         SERVICE_SET_DAY,
         handle_set_day,
         schema=SET_DAY_SCHEMA
-    )
-    
-    # Add manual refresh service
-    async def handle_refresh_token(call: ServiceCall) -> None:
-        """Manually refresh authentication tokens - always forces refresh."""
-        _LOGGER.info("Manual token refresh requested (forced)")
-        success = await hass.async_add_executor_job(auth.refresh_token, True)  # force=True
-        if success:
-            _LOGGER.info("✓ Token refresh successful")
-        else:
-            _LOGGER.error(
-                "✗ Token refresh failed. "
-                "Please reconfigure: Settings → Devices & Services → "
-                "Hive Schedule Manager → Configure (⋮ menu)"
-            )
-    
-    hass.services.async_register(
-        DOMAIN,
-        "refresh_token",
-        handle_refresh_token
     )
     
     _LOGGER.info("Hive Schedule Manager setup complete")
@@ -704,11 +400,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    hass.data[DOMAIN].pop(entry.entry_id)
+    data = hass.data[DOMAIN].pop(entry.entry_id)
+    
+    # Close API session
+    if "api" in data:
+        await data["api"].async_close()
     
     # Unregister services if this is the last entry
     if not hass.data[DOMAIN]:
         hass.services.async_remove(DOMAIN, SERVICE_SET_DAY)
-        hass.services.async_remove(DOMAIN, "refresh_token")
     
     return True

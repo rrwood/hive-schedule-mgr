@@ -1,30 +1,17 @@
-"""Config flow for Hive Schedule Manager integration."""
+"""Config flow for Hive Schedule Manager integration v2.0 using apyhiveapi."""
 from __future__ import annotations
 
 import logging
 from typing import Any
-from datetime import datetime, timedelta
 
 import voluptuous as vol
-from pycognito import Cognito
-from pycognito.exceptions import SMSMFAChallengeException
-from botocore.exceptions import ClientError
+from apyhiveapi import Auth
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_USERNAME, CONF_PASSWORD
 from homeassistant.data_entry_flow import FlowResult
 
-from .const import (
-    DOMAIN,
-    COGNITO_POOL_ID,
-    COGNITO_CLIENT_ID,
-    COGNITO_REGION,
-    CONF_MFA_CODE,
-    CONF_ID_TOKEN,
-    CONF_ACCESS_TOKEN,
-    CONF_REFRESH_TOKEN,
-    CONF_TOKEN_EXPIRY,
-)
+from .const import DOMAIN, CONF_MFA_CODE, CONF_TOKENS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,15 +19,13 @@ _LOGGER = logging.getLogger(__name__)
 class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Hive Schedule Manager."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self):
         """Initialize the config flow."""
         self._username = None
         self._password = None
-        self._session_token = None
-        self._cognito = None
-        self._auth_result = None
+        self._session = None
         self._reconfig_entry = None
 
     @staticmethod
@@ -78,12 +63,10 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
                 
                 if result.get("mfa_required"):
-                    # MFA needed, go to MFA step
                     _LOGGER.info("MFA required, proceeding to MFA step")
                     return await self.async_step_mfa()
                 elif result.get("success"):
-                    # Success without MFA
-                    _LOGGER.info("Authentication successful without MFA")
+                    # Authentication successful without MFA
                     return await self._create_or_update_entry()
                 else:
                     errors["base"] = "invalid_auth"
@@ -93,15 +76,18 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             except Exception as ex:
-                _LOGGER.exception("Unexpected exception in user step: %s", ex)
+                _LOGGER.exception("Unexpected exception: %s", ex)
                 errors["base"] = "unknown"
+
+        # Show form
+        data_schema = vol.Schema({
+            vol.Required(CONF_USERNAME, default=self._username or ""): str,
+            vol.Required(CONF_PASSWORD, default=""): str,
+        })
 
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema({
-                vol.Required(CONF_USERNAME): str,
-                vol.Required(CONF_PASSWORD): str,
-            }),
+            data_schema=data_schema,
             errors=errors,
         )
 
@@ -122,8 +108,7 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 
                 if result.get("success"):
                     # MFA verified successfully
-                    _LOGGER.info("MFA verified, storing tokens and creating entry")
-                    self._auth_result = result.get("auth_result")
+                    _LOGGER.info("MFA verified, creating entry")
                     return await self._create_or_update_entry()
                 else:
                     _LOGGER.warning("MFA verification failed")
@@ -152,19 +137,7 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_PASSWORD: self._password,
         }
         
-        # Add tokens if we have them from MFA
-        if self._auth_result:
-            entry_data[CONF_ID_TOKEN] = self._auth_result.get('IdToken', '')
-            entry_data[CONF_ACCESS_TOKEN] = self._auth_result.get('AccessToken', '')
-            entry_data[CONF_REFRESH_TOKEN] = self._auth_result.get('RefreshToken', '')
-            # Token expires in ~1 hour, store expiry time
-            expiry = (datetime.now() + timedelta(minutes=55)).isoformat()
-            entry_data[CONF_TOKEN_EXPIRY] = expiry
-            _LOGGER.debug("Stored authentication tokens in config entry")
-            _LOGGER.info(
-                "Initial tokens created - ID/Access expire at %s (55 mins), Refresh token lifetime unknown",
-                (datetime.now() + timedelta(minutes=55)).strftime("%H:%M:%S")
-            )
+        _LOGGER.info("Storing Hive credentials (apyhiveapi handles tokens)")
         
         # Check if entry already exists
         existing_entry = await self.async_set_unique_id(self._username.lower())
@@ -190,100 +163,51 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def _try_authenticate(self) -> dict[str, Any]:
         """Try to authenticate - returns status dict."""
         try:
-            self._cognito = Cognito(
-                user_pool_id=COGNITO_POOL_ID,
-                client_id=COGNITO_CLIENT_ID,
-                user_pool_region=COGNITO_REGION,
-                username=self._username
-            )
+            # Create Auth session
+            self._session = Auth(self._username, self._password)
             
-            try:
-                self._cognito.authenticate(password=self._password)
-                # Success without MFA - store tokens
-                _LOGGER.info("Authentication successful without MFA")
-                self._auth_result = {
-                    'IdToken': self._cognito.id_token,
-                    'AccessToken': self._cognito.access_token,
-                    'RefreshToken': self._cognito.refresh_token,
-                }
-                return {"success": True}
-                
-            except SMSMFAChallengeException as mfa_error:
+            # Attempt login
+            result = self._session.login()
+            
+            # Check if MFA is required
+            if result.get("ChallengeName") == "SMS_MFA":
                 _LOGGER.info("MFA required - SMS code sent to registered phone")
-                # Extract session token from the exception
-                if len(mfa_error.args) > 1 and isinstance(mfa_error.args[1], dict):
-                    self._session_token = mfa_error.args[1].get('Session')
-                    _LOGGER.debug("MFA session token extracted")
                 return {"mfa_required": True}
+            
+            # Login successful without MFA
+            _LOGGER.info("Authentication successful without MFA")
+            return {"success": True}
                 
-        except ClientError as err:
-            error_code = err.response.get("Error", {}).get("Code", "")
-            error_message = str(err)
+        except Exception as err:
+            error_str = str(err).lower()
+            _LOGGER.error("Auth error: %s", err)
             
-            _LOGGER.error("Auth error: %s - %s", error_code, error_message)
-            
-            if "NotAuthorizedException" in error_code or "not authorized" in error_message.lower():
-                raise InvalidAuth
-            elif "UserNotFoundException" in error_code:
+            if "incorrect" in error_str or "invalid" in error_str or "not authorized" in error_str:
                 raise InvalidAuth
             else:
                 raise CannotConnect
-                
-        except Exception as err:
-            _LOGGER.exception("Unexpected exception during auth: %s", err)
-            raise CannotConnect
 
     def _verify_mfa(self, mfa_code: str) -> dict[str, Any]:
-        """Verify MFA code - returns status dict with tokens."""
+        """Verify MFA code - returns status dict."""
         try:
-            if not self._cognito or not self._session_token:
-                _LOGGER.error("No MFA session available for verification")
+            if not self._session:
+                _LOGGER.error("No session available for MFA verification")
                 return {"success": False}
             
             _LOGGER.debug("Verifying MFA code...")
             
-            # Use boto3 client directly to respond to MFA challenge
-            client = self._cognito.client
-            response = client.respond_to_auth_challenge(
-                ClientId=COGNITO_CLIENT_ID,
-                ChallengeName='SMS_MFA',
-                Session=self._session_token,
-                ChallengeResponses={
-                    'SMS_MFA_CODE': mfa_code,
-                    'USERNAME': self._username,
-                }
-            )
+            # Complete MFA challenge
+            result = self._session.sms_2fa(mfa_code, self._session.SMS_REQUIRED)
             
-            # Check if we got authentication result
-            if 'AuthenticationResult' in response:
-                _LOGGER.info("MFA verification successful - tokens received")
-                auth_result = response['AuthenticationResult']
-                
-                # Note: Device confirmation doesn't work with Hive's Cognito pool
-                # NewDeviceMetadata appears but can't be confirmed
-                # This is fine - we'll use automatic re-auth when tokens expire
-                
-                return {
-                    "success": True,
-                    "auth_result": auth_result,
-                    "device_info": {}  # Not used
-                }
+            if result:
+                _LOGGER.info("MFA verification successful")
+                return {"success": True}
             else:
-                _LOGGER.warning("MFA response did not contain authentication result")
+                _LOGGER.warning("MFA verification failed")
                 return {"success": False}
                 
-        except ClientError as err:
-            error_code = err.response.get("Error", {}).get("Code", "")
-            error_msg = err.response.get("Error", {}).get("Message", "")
-            _LOGGER.error("MFA verification error: %s - %s", error_code, error_msg)
-            
-            if "CodeMismatchException" in error_code:
-                _LOGGER.warning("Invalid MFA code provided")
-            
-            return {"success": False}
-            
         except Exception as err:
-            _LOGGER.exception("Unexpected error during MFA verification: %s", err)
+            _LOGGER.error("MFA verification error: %s", err)
             return {"success": False}
 
 
