@@ -53,7 +53,7 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 
                 # Authentication successful without MFA
                 _LOGGER.info("Authentication successful")
-                return await self._create_entry()
+                return await self._create_entry(auth_tokens=tokens)
 
             except Exception as ex:
                 _LOGGER.error("Authentication error: %s", ex)
@@ -82,10 +82,14 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             try:
                 # Complete MFA challenge - need to pass the challenge_parameters from login
-                await self._hive_auth.sms_2fa(mfa_code, self._login_response)
+                result = await self._hive_auth.sms_2fa(mfa_code, self._login_response)
                 
                 _LOGGER.info("MFA verification successful")
-                return await self._create_entry()
+                _LOGGER.debug("MFA result: %s", result)
+                
+                # The result should contain the final authentication tokens
+                # Store them in the config entry
+                return await self._create_entry(auth_tokens=result)
 
             except Exception as ex:
                 _LOGGER.error("MFA verification error: %s", ex)
@@ -103,7 +107,7 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
-    async def _create_entry(self) -> FlowResult:
+    async def _create_entry(self, auth_tokens=None) -> FlowResult:
         """Create the config entry."""
         # Check if already configured
         await self.async_set_unique_id(self._username.lower())
@@ -111,10 +115,18 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         
         _LOGGER.info("Creating config entry for %s", self._username)
         
+        # Prepare data
+        entry_data = {
+            CONF_USERNAME: self._username,
+            CONF_PASSWORD: self._password,
+        }
+        
+        # Store auth tokens if available
+        if auth_tokens:
+            _LOGGER.debug("Storing auth tokens in config entry")
+            entry_data["auth_tokens"] = auth_tokens
+        
         return self.async_create_entry(
             title=self._username,
-            data={
-                CONF_USERNAME: self._username,
-                CONF_PASSWORD: self._password,
-            }
+            data=entry_data
         )

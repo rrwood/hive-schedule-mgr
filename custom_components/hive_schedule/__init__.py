@@ -263,6 +263,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hive.session.username = username
         hive.session.password = password
         
+        # If auth tokens were stored during config flow, load them
+        if "auth_tokens" in entry.data:
+            auth_tokens = entry.data["auth_tokens"]
+            _LOGGER.info("Loading auth tokens from config entry")
+            _LOGGER.debug("Auth tokens: %s", auth_tokens)
+            
+            # Store in session
+            if isinstance(auth_tokens, dict):
+                hive.session.tokens = {"tokenData": auth_tokens}
+                _LOGGER.info("✓ Loaded authentication tokens")
+        
         _LOGGER.info("✓ Hive instance created")
         _LOGGER.info("✓ Using apyhiveapi for token management")
         
