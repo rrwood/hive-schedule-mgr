@@ -1,6 +1,6 @@
 """
 Hive Schedule Manager Integration for Home Assistant v2.0
-Using apyhiveapi for proper authentication with 30-day tokens
+Depends on official Hive integration for authentication
 """
 from __future__ import annotations
 
@@ -13,16 +13,11 @@ from typing import Any
 import voluptuous as vol
 import yaml
 import aiofiles
-from apyhiveapi import Hive
-from apyhiveapi.helper.hive_exceptions import HiveReauthRequired, HiveApiError
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers import config_validation as cv
-from homeassistant.const import CONF_USERNAME, CONF_PASSWORD, CONF_SCAN_INTERVAL
-from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import aiohttp_client
 
 from .const import (
     DOMAIN,
@@ -47,7 +42,6 @@ def _get_version() -> str:
         return 'unknown'
 
 VERSION = _get_version()
-DEFAULT_SCAN_INTERVAL = timedelta(hours=1)  # apyhiveapi handles token refresh
 PROFILES_FILE = "hive_schedule_profiles.yaml"
 
 # Service schema
@@ -240,132 +234,42 @@ def _validate_schedule(schedule: list) -> bool:
     return True
 
 
-class HiveScheduleAPI:
-    """API client for Hive heating schedules using pyhiveapi."""
-    
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
-        """Initialize the API client."""
-        self.hass = hass
-        self.entry = entry
-        self._hive = None
-        
-    async def async_setup(self) -> bool:
-        """Set up the Hive API connection."""
-        username = self.entry.data[CONF_USERNAME]
-        password = self.entry.data[CONF_PASSWORD]
-        
-        try:
-            # Get aiohttp session
-            websession = aiohttp_client.async_get_clientsession(self.hass)
-            
-            # Initialize Hive API
-            self._hive = Hive(websession=websession)
-            
-            # Login
-            login_success = await self._hive.session.login(username, password)
-            
-            if not login_success:
-                _LOGGER.error("Failed to login to Hive")
-                return False
-            
-            _LOGGER.info("✓ Successfully authenticated with Hive")
-            _LOGGER.info("✓ Tokens managed by apyhiveapi (30-day lifetime)")
-            
-            # Start session
-            await self._hive.session.startSession()
-            
-            return True
-            
-        except HiveReauthRequired:
-            _LOGGER.error("Re-authentication required - please reconfigure integration")
-            return False
-        except HiveApiError as e:
-            _LOGGER.error("Hive API error: %s", e)
-            return False
-        except Exception as e:
-            _LOGGER.error("Failed to authenticate with Hive: %s", e)
-            _LOGGER.debug("Setup error details", exc_info=True)
-            return False
-    
-    async def async_update_schedule(self, node_id: str, day: str, schedule: list) -> bool:
-        """Update schedule for a specific day."""
-        try:
-            # Convert schedule to Hive format
-            hive_schedule = []
-            for entry in schedule:
-                # Convert HH:MM to minutes from midnight
-                hours, minutes = entry["time"].split(":")
-                minutes_from_midnight = int(hours) * 60 + int(minutes)
-                
-                hive_schedule.append({
-                    "value": {"target": entry["temp"]},
-                    "start": minutes_from_midnight
-                })
-            
-            # Update only the specified day
-            schedule_data = {
-                "schedule": {
-                    day: hive_schedule
-                }
-            }
-            
-            _LOGGER.debug("Updating schedule for %s: %s", day, schedule_data)
-            
-            # Use pyhiveapi's heating module
-            result = await self._hive.heating.setSchedule(node_id, schedule_data)
-            
-            if result:
-                _LOGGER.info("✓ Successfully updated %s schedule for node %s", day, node_id)
-                return True
-            else:
-                _LOGGER.error("Failed to update schedule - API returned False")
-                return False
-                
-        except HiveReauthRequired:
-            _LOGGER.error("Re-authentication required. Please reconfigure the integration.")
-            raise HomeAssistantError("Re-authentication required") from None
-        except HiveApiError as e:
-            _LOGGER.error("Hive API error updating schedule: %s", e)
-            raise HomeAssistantError(f"Hive API error: {e}") from e
-        except Exception as e:
-            _LOGGER.error("Error updating schedule: %s", e)
-            _LOGGER.debug("Schedule update error details", exc_info=True)
-            raise HomeAssistantError(f"Failed to update schedule: {e}") from e
-    
-    async def async_close(self):
-        """Close the API session."""
-        if self._hive:
-            try:
-                await self._hive.session.close()
-                _LOGGER.debug("Closed Hive API session")
-            except Exception as e:
-                _LOGGER.debug("Error closing session: %s", e)
-
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Hive Schedule Manager from a config entry."""
     
     _LOGGER.info("=" * 80)
-    _LOGGER.info("Hive Schedule Manager v%s (apyhiveapi)", VERSION)
-    _LOGGER.info("30-day token lifetime with automatic refresh")
+    _LOGGER.info("Hive Schedule Manager v%s", VERSION)
+    _LOGGER.info("Using official Hive integration for authentication")
     _LOGGER.info("=" * 80)
     
-    # Initialize API
-    api = HiveScheduleAPI(hass, entry)
+    # Check if official Hive integration is loaded
+    if "hive" not in hass.data:
+        _LOGGER.error("Official Hive integration not found! Please install it first.")
+        return False
     
-    # Setup and authenticate
-    if not await api.async_setup():
-        _LOGGER.error("Failed to set up Hive API")
+    # Get Hive API from official integration
+    hive_data = hass.data["hive"]
+    
+    # Find the Hive entry
+    hive_api = None
+    for hive_entry_id, data in hive_data.items():
+        if isinstance(data, dict) and "hive" in data:
+            hive_api = data["hive"]
+            _LOGGER.info("✓ Found official Hive integration connection")
+            break
+    
+    if not hive_api:
+        _LOGGER.error("Could not access Hive API from official integration")
         return False
     
     # Load profiles
     profiles = await _load_profiles(hass)
     _LOGGER.info("Loaded %d schedule profiles", len(profiles))
     
-    # Store API instance
+    # Store data
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {
-        "api": api,
+        "hive_api": hive_api,
         "profiles": profiles,
     }
     
@@ -397,10 +301,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         
         _LOGGER.info("Setting schedule for %s on node %s", day, node_id)
         
-        # Update schedule
-        await api.async_update_schedule(node_id, day, day_schedule)
+        # Convert schedule to Hive format
+        hive_schedule = []
+        for entry in day_schedule:
+            hours, minutes = entry["time"].split(":")
+            minutes_from_midnight = int(hours) * 60 + int(minutes)
+            
+            hive_schedule.append({
+                "value": {"target": entry["temp"]},
+                "start": minutes_from_midnight
+            })
         
-        _LOGGER.info("Successfully updated %s schedule", day)
+        schedule_data = {
+            "schedule": {
+                day: hive_schedule
+            }
+        }
+        
+        # Update schedule using official Hive API
+        try:
+            result = await hive_api.heating.setSchedule(node_id, schedule_data)
+            
+            if result:
+                _LOGGER.info("✓ Successfully updated %s schedule", day)
+            else:
+                raise HomeAssistantError("Hive API returned False")
+                
+        except Exception as e:
+            _LOGGER.error("Failed to update schedule: %s", e)
+            raise HomeAssistantError(f"Failed to update schedule: {e}") from e
     
     hass.services.async_register(
         DOMAIN,
@@ -416,11 +345,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    data = hass.data[DOMAIN].pop(entry.entry_id)
-    
-    # Close API session
-    if "api" in data:
-        await data["api"].async_close()
+    hass.data[DOMAIN].pop(entry.entry_id)
     
     # Unregister services if this is the last entry
     if not hass.data[DOMAIN]:

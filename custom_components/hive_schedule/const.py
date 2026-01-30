@@ -4,7 +4,6 @@ DOMAIN = "hive_schedule"
 
 # Configuration
 CONF_MFA_CODE = "mfa_code"
-CONF_TOKENS = "tokens"  # apyhiveapi manages tokens internally
 
 # Service names
 SERVICE_SET_DAY = "set_day_schedule"
