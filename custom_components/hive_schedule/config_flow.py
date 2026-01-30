@@ -78,16 +78,24 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             try:
                 # Complete MFA challenge
-                await self._hive_auth.sms_2fa(
-                    mfa_code,
-                    self._hive_auth.SMS_REQUIRED
-                )
+                # Try different apyhiveapi signatures
+                try:
+                    # Method 1: Just MFA code
+                    await self._hive_auth.sms_2fa(mfa_code)
+                except TypeError:
+                    # Method 2: With session (might be stored differently)
+                    if hasattr(self._hive_auth, 'session'):
+                        await self._hive_auth.sms_2fa(mfa_code, self._hive_auth.session)
+                    else:
+                        # Method 3: Re-raise the original error
+                        raise
                 
                 _LOGGER.info("MFA verification successful")
                 return await self._create_entry()
 
             except Exception as ex:
                 _LOGGER.error("MFA verification error: %s", ex)
+                _LOGGER.debug("MFA error details", exc_info=True)
                 errors["base"] = "invalid_mfa"
 
         return self.async_show_form(
