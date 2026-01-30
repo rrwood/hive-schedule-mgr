@@ -242,25 +242,65 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("Using official Hive integration for authentication")
     _LOGGER.info("=" * 80)
     
+    # Debug: Check what's in hass.data
+    _LOGGER.debug("Available domains in hass.data: %s", list(hass.data.keys()))
+    
     # Check if official Hive integration is loaded
     if "hive" not in hass.data:
-        _LOGGER.error("Official Hive integration not found! Please install it first.")
+        _LOGGER.error("'hive' not found in hass.data!")
+        _LOGGER.info("Checking config entries for Hive integration...")
+        
+        # Check config entries
+        hive_entries = [
+            entry for entry in hass.config_entries.async_entries()
+            if entry.domain == "hive"
+        ]
+        
+        if hive_entries:
+            _LOGGER.warning("Hive integration is configured but not loaded in hass.data yet")
+            _LOGGER.warning("This might be a race condition - try reloading the integration")
+        else:
+            _LOGGER.error("No Hive integration found in config entries either!")
+        
         return False
+    
+    _LOGGER.info("✓ Found 'hive' in hass.data")
+    _LOGGER.debug("hass.data['hive'] keys: %s", list(hass.data["hive"].keys()) if isinstance(hass.data["hive"], dict) else "not a dict")
     
     # Get Hive API from official integration
     hive_data = hass.data["hive"]
     
-    # Find the Hive entry
+    # Try different ways to access the Hive API
     hive_api = None
+    
+    # Method 1: Look for 'hive' key in entries
     for hive_entry_id, data in hive_data.items():
+        _LOGGER.debug("Checking entry %s: %s", hive_entry_id, type(data))
         if isinstance(data, dict) and "hive" in data:
             hive_api = data["hive"]
-            _LOGGER.info("✓ Found official Hive integration connection")
+            _LOGGER.info("✓ Found Hive API via method 1 (dict with 'hive' key)")
             break
+    
+    # Method 2: Maybe it's directly the Hive object
+    if not hive_api:
+        for hive_entry_id, data in hive_data.items():
+            if hasattr(data, "heating"):
+                hive_api = data
+                _LOGGER.info("✓ Found Hive API via method 2 (object with 'heating' attribute)")
+                break
+    
+    # Method 3: Check if there's a specific structure
+    if not hive_api and isinstance(hive_data, dict):
+        # Try to find any entry
+        for key, value in hive_data.items():
+            _LOGGER.debug("Entry %s has type: %s, dir: %s", key, type(value), dir(value) if hasattr(value, '__dict__') else "N/A")
     
     if not hive_api:
         _LOGGER.error("Could not access Hive API from official integration")
+        _LOGGER.error("hass.data['hive'] structure: %s", hive_data)
         return False
+    
+    _LOGGER.info("✓ Successfully connected to Hive API")
     
     # Load profiles
     profiles = await _load_profiles(hass)

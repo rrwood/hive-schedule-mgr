@@ -24,14 +24,22 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Handle the initial step."""
         
-        # Check if official Hive integration is available
-        if "hive" not in self.hass.data:
+        # Check if official Hive integration is configured
+        hive_entries = [
+            entry for entry in self.hass.config_entries.async_entries()
+            if entry.domain == "hive"
+        ]
+        
+        if not hive_entries:
+            _LOGGER.error("No Hive integration found in config entries")
             return self.async_abort(
                 reason="hive_not_configured",
                 description_placeholders={
-                    "error": "Official Hive integration not found. Please install and configure it first."
+                    "error": "Official Hive integration not found. Please install and configure it first from Settings → Devices & Services → Add Integration → Hive"
                 }
             )
+        
+        _LOGGER.info("Found %d Hive integration(s)", len(hive_entries))
         
         # Check if already configured
         await self.async_set_unique_id(DOMAIN)
