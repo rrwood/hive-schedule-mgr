@@ -255,28 +255,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     websession = aiohttp_client.async_get_clientsession(hass)
     
     try:
-        # Create Hive instance
+        # Create Hive instance - we won't authenticate here, just use it for structure
+        # Authentication was already done in config_flow
         hive = Hive(websession=websession)
         
-        # Set credentials on session
+        # Store credentials for later use (API calls need fresh tokens)
         hive.session.username = username
         hive.session.password = password
         
-        # Login via session (handles auth internally)
-        login_result = await hive.session.login()
-        
-        if not login_result:
-            _LOGGER.error("Failed to login to Hive")
-            return False
-        
-        _LOGGER.debug("Session login result: %s", login_result)
-        
-        _LOGGER.info("✓ Successfully authenticated with Hive")
-        _LOGGER.info("✓ apyhiveapi managing tokens (30-day lifetime)")
+        _LOGGER.info("✓ Hive instance created")
+        _LOGGER.info("✓ Using apyhiveapi for token management")
         
     except Exception as e:
-        _LOGGER.error("Authentication failed: %s", e)
-        _LOGGER.debug("Auth error details", exc_info=True)
+        _LOGGER.error("Failed to create Hive instance: %s", e)
+        _LOGGER.debug("Error details", exc_info=True)
         return False
     
     # Load profiles
@@ -335,15 +327,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             }
         }
         
-        # Get token from Hive session for API call
+        # Get token for API call - authenticate if needed
         try:
+            # Check if we have tokens
+            if not hasattr(hive.session, 'tokens') or not hive.session.tokens:
+                _LOGGER.debug("No tokens available, authenticating...")
+                
+                # Use Auth to login with credentials
+                auth = Auth(hive.session.username, hive.session.password)
+                tokens = await auth.login()
+                
+                if tokens and tokens.get("ChallengeName") == "SMS_MFA":
+                    _LOGGER.error("MFA required but not available in service call")
+                    raise HomeAssistantError("Re-authentication required with MFA - please reconfigure integration")
+                
+                # Transfer tokens to session
+                hive.session.tokens = tokens
+                _LOGGER.debug("Authenticated successfully")
+            
             # Extract token from session
-            if hasattr(hive.session, 'token'):
-                token = hive.session.token
-            elif hasattr(hive.session, 'tokenData') and isinstance(hive.session.tokenData, dict):
-                token = hive.session.tokenData.get('token') or hive.session.tokenData.get('IdToken')
-            else:
-                _LOGGER.error("Could not extract token from Hive session")
+            token = None
+            if hasattr(hive.session, 'tokens') and hive.session.tokens:
+                # Try different token locations
+                if isinstance(hive.session.tokens, dict):
+                    token = hive.session.tokens.get('IdToken') or hive.session.tokens.get('AccessToken')
+                elif isinstance(hive.session.tokens, str):
+                    token = hive.session.tokens
+            
+            if not token:
+                _LOGGER.error("Could not extract authentication token")
                 raise HomeAssistantError("No authentication token available")
             
             # Make direct HTTP request to schedule API
@@ -359,6 +371,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             async with websession.post(url, json=schedule_data, headers=headers) as response:
                 if response.status == 200:
                     _LOGGER.info("✓ Successfully updated %s schedule", day)
+                elif response.status == 401:
+                    _LOGGER.error("Authentication failed - token may have expired")
+                    # Clear tokens so next call will re-authenticate
+                    hive.session.tokens = None
+                    raise HomeAssistantError("Authentication failed - please try again or reconfigure integration")
                 else:
                     error_text = await response.text()
                     _LOGGER.error("API returned %d: %s", response.status, error_text)
