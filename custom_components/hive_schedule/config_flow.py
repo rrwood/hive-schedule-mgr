@@ -161,6 +161,10 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             expiry = (datetime.now() + timedelta(minutes=55)).isoformat()
             entry_data[CONF_TOKEN_EXPIRY] = expiry
             _LOGGER.debug("Stored authentication tokens in config entry")
+            _LOGGER.info(
+                "Initial tokens created - ID/Access expire at %s (55 mins), Refresh token lifetime unknown",
+                (datetime.now() + timedelta(minutes=55)).strftime("%H:%M:%S")
+            )
         
         # Check if entry already exists
         existing_entry = await self.async_set_unique_id(self._username.lower())

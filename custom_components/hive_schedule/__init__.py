@@ -1,6 +1,6 @@
 """
 Hive Schedule Manager Integration for Home Assistant
-
+..
 """
 from __future__ import annotations
 
@@ -277,10 +277,18 @@ class HiveAuth:
         if expiry_str:
             try:
                 self._token_expiry = datetime.fromisoformat(expiry_str)
+                time_until_expiry = (self._token_expiry - datetime.now()).total_seconds() / 60
+                _LOGGER.info(
+                    "Tokens loaded - expire at %s (%.1f minutes from now)",
+                    self._token_expiry.strftime("%H:%M:%S"),
+                    time_until_expiry
+                )
             except (ValueError, TypeError):
                 self._token_expiry = None
+                _LOGGER.warning("Could not parse token expiry time")
         else:
             self._token_expiry = None
+            _LOGGER.warning("No token expiry time found in config entry")
     
     def refresh_token(self, force: bool = False) -> bool:
         """Refresh the authentication token using refresh token.
@@ -316,19 +324,42 @@ class HiveAuth:
             )
             
             # Refresh tokens using pycognito
-            self._cognito.renew_access_token()
+            try:
+                self._cognito.renew_access_token()
+            except Exception as renew_error:
+                _LOGGER.error("renew_access_token() failed: %s", renew_error)
+                raise
             
-            # Update stored tokens (refresh_token stays the same)
+            # Verify we actually got new tokens
+            if not self._cognito.id_token or not self._cognito.access_token:
+                _LOGGER.error("Token refresh succeeded but no new tokens returned!")
+                return False
+            
+            # Update stored tokens
             self._id_token = self._cognito.id_token
             self._access_token = self._cognito.access_token
-            # Note: refresh_token doesn't change, keep the existing one
+            
+            # Check if refresh token was rotated (Cognito may issue new refresh token)
+            if hasattr(self._cognito, 'refresh_token') and self._cognito.refresh_token:
+                if self._cognito.refresh_token != self._refresh_token:
+                    _LOGGER.info("✓ New refresh token issued by Cognito (token rotation)")
+                    self._refresh_token = self._cognito.refresh_token
+                else:
+                    _LOGGER.debug("Refresh token unchanged (no rotation - this is the problem!)")
+            else:
+                _LOGGER.warning("No refresh_token attribute on Cognito object after renewal")
+            
             self._token_expiry = datetime.now() + timedelta(minutes=55)
             
             # Save updated tokens to config entry
             self._save_tokens()
             
-            _LOGGER.info("Successfully refreshed authentication token (expires %s)", 
+            _LOGGER.info("Successfully refreshed ID/Access tokens (expire %s)", 
                         self._token_expiry.strftime("%H:%M:%S"))
+            _LOGGER.warning(
+                "NOTE: Refresh token itself may have fixed lifetime from initial login. "
+                "If it expires, you'll need to reconfigure with MFA."
+            )
             return True
             
         except ClientError as e:
@@ -551,7 +582,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     
     _LOGGER.info("=" * 80)
     _LOGGER.info("Hive Schedule Manager v%s", VERSION)
-    _LOGGER.info("Integration to update Hive heating profiles")
+    _LOGGER.info("Update Hive Schedules from Automations")
     _LOGGER.info("=" * 80)
     
     # Initialize authentication and API
