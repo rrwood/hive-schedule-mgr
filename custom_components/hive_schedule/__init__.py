@@ -254,16 +254,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Get aiohttp session
     websession = aiohttp_client.async_get_clientsession(hass)
     
-    # Create Hive instance (apyhiveapi handles all token management!)
-    hive = Hive(websession=websession)
-    
     try:
-        # Login - apyhiveapi handles tokens, refresh, device registration automatically
-        login_success = await hive.session.login(username, password)
+        # Create Hive instance
+        hive = Hive(websession=websession)
         
-        if not login_success:
-            _LOGGER.error("Failed to login to Hive")
-            return False
+        # Login with credentials - Hive handles this internally
+        # Need to set credentials and start session
+        hive.session.username = username
+        hive.session.password = password
+        
+        # Start the session (this authenticates and gets tokens)
+        await hive.session.startSession()
         
         _LOGGER.info("✓ Successfully authenticated with Hive")
         _LOGGER.info("✓ apyhiveapi managing tokens (30-day lifetime)")
