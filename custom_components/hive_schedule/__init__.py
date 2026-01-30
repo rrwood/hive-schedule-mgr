@@ -16,6 +16,7 @@ import aiofiles
 
 # apyhiveapi is bundled with Home Assistant (used by official Hive integration)
 from apyhiveapi import Hive
+from apyhiveapi.api.hive_auth import Auth
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
