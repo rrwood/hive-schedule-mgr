@@ -5,13 +5,15 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-from apyhiveapi import Auth
+from apyhiveapi import Hive
+from apyhiveapi.helper.hive_exceptions import HiveReauthRequired, HiveApiError
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_USERNAME, CONF_PASSWORD
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers import aiohttp_client
 
-from .const import DOMAIN, CONF_MFA_CODE, CONF_TOKENS
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,7 +27,7 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize the config flow."""
         self._username = None
         self._password = None
-        self._session = None
+        self._hive = None
         self._reconfig_entry = None
 
     @staticmethod
@@ -58,15 +60,10 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             try:
                 # Try to authenticate
-                result = await self.hass.async_add_executor_job(
-                    self._try_authenticate
-                )
+                result = await self._try_authenticate()
                 
-                if result.get("mfa_required"):
-                    _LOGGER.info("MFA required, proceeding to MFA step")
-                    return await self.async_step_mfa()
-                elif result.get("success"):
-                    # Authentication successful without MFA
+                if result.get("success"):
+                    # Authentication successful
                     return await self._create_or_update_entry()
                 else:
                     errors["base"] = "invalid_auth"
@@ -89,44 +86,6 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             step_id="user",
             data_schema=data_schema,
             errors=errors,
-        )
-
-    async def async_step_mfa(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Handle MFA code entry."""
-        errors: dict[str, str] = {}
-
-        if user_input is not None:
-            mfa_code = user_input[CONF_MFA_CODE]
-
-            try:
-                # Verify MFA code
-                result = await self.hass.async_add_executor_job(
-                    self._verify_mfa, mfa_code
-                )
-                
-                if result.get("success"):
-                    # MFA verified successfully
-                    _LOGGER.info("MFA verified, creating entry")
-                    return await self._create_or_update_entry()
-                else:
-                    _LOGGER.warning("MFA verification failed")
-                    errors["base"] = "invalid_mfa"
-
-            except Exception as ex:
-                _LOGGER.exception("Exception during MFA verification: %s", ex)
-                errors["base"] = "unknown"
-
-        return self.async_show_form(
-            step_id="mfa",
-            data_schema=vol.Schema({
-                vol.Required(CONF_MFA_CODE): str,
-            }),
-            errors=errors,
-            description_placeholders={
-                "username": self._username,
-            },
         )
 
     async def _create_or_update_entry(self) -> FlowResult:
@@ -160,55 +119,43 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             data=entry_data
         )
 
-    def _try_authenticate(self) -> dict[str, Any]:
+    async def _try_authenticate(self) -> dict[str, Any]:
         """Try to authenticate - returns status dict."""
         try:
-            # Create Auth session
-            self._session = Auth(self._username, self._password)
+            # Get aiohttp session
+            websession = aiohttp_client.async_get_clientsession(self.hass)
+            
+            # Create Hive instance
+            self._hive = Hive(websession=websession)
             
             # Attempt login
-            result = self._session.login()
+            login_success = await self._hive.session.login(self._username, self._password)
             
-            # Check if MFA is required
-            if result.get("ChallengeName") == "SMS_MFA":
-                _LOGGER.info("MFA required - SMS code sent to registered phone")
-                return {"mfa_required": True}
+            if not login_success:
+                _LOGGER.error("Login failed - check credentials")
+                raise InvalidAuth
             
-            # Login successful without MFA
-            _LOGGER.info("Authentication successful without MFA")
+            # If we get here without exception, auth was successful
+            _LOGGER.info("Authentication successful")
             return {"success": True}
                 
-        except Exception as err:
+        except HiveReauthRequired:
+            _LOGGER.error("Re-authentication required")
+            raise InvalidAuth
+        except HiveApiError as err:
+            _LOGGER.error("Hive API error: %s", err)
             error_str = str(err).lower()
-            _LOGGER.error("Auth error: %s", err)
-            
             if "incorrect" in error_str or "invalid" in error_str or "not authorized" in error_str:
                 raise InvalidAuth
             else:
                 raise CannotConnect
-
-    def _verify_mfa(self, mfa_code: str) -> dict[str, Any]:
-        """Verify MFA code - returns status dict."""
-        try:
-            if not self._session:
-                _LOGGER.error("No session available for MFA verification")
-                return {"success": False}
-            
-            _LOGGER.debug("Verifying MFA code...")
-            
-            # Complete MFA challenge
-            result = self._session.sms_2fa(mfa_code, self._session.SMS_REQUIRED)
-            
-            if result:
-                _LOGGER.info("MFA verification successful")
-                return {"success": True}
-            else:
-                _LOGGER.warning("MFA verification failed")
-                return {"success": False}
-                
         except Exception as err:
-            _LOGGER.error("MFA verification error: %s", err)
-            return {"success": False}
+            _LOGGER.error("Auth error: %s", err)
+            error_str = str(err).lower()
+            if "incorrect" in error_str or "invalid" in error_str or "not authorized" in error_str:
+                raise InvalidAuth
+            else:
+                raise CannotConnect
 
 
 class HiveScheduleOptionsFlow(config_entries.OptionsFlow):

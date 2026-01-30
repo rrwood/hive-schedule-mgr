@@ -13,7 +13,8 @@ from typing import Any
 import voluptuous as vol
 import yaml
 import aiofiles
-from apyhiveapi import Auth, Hive
+from apyhiveapi import Hive
+from apyhiveapi.helper.hive_exceptions import HiveReauthRequired, HiveApiError
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -21,6 +22,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.const import CONF_USERNAME, CONF_PASSWORD, CONF_SCAN_INTERVAL
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import aiohttp_client
 
 from .const import (
     DOMAIN,
@@ -29,7 +31,6 @@ from .const import (
     ATTR_DAY,
     ATTR_SCHEDULE,
     ATTR_PROFILE,
-    CONF_TOKENS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -240,14 +241,13 @@ def _validate_schedule(schedule: list) -> bool:
 
 
 class HiveScheduleAPI:
-    """API client for Hive heating schedules using apyhiveapi."""
+    """API client for Hive heating schedules using pyhiveapi."""
     
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry):
         """Initialize the API client."""
         self.hass = hass
         self.entry = entry
         self._hive = None
-        self._session = None
         
     async def async_setup(self) -> bool:
         """Set up the Hive API connection."""
@@ -255,26 +255,36 @@ class HiveScheduleAPI:
         password = self.entry.data[CONF_PASSWORD]
         
         try:
+            # Get aiohttp session
+            websession = aiohttp_client.async_get_clientsession(self.hass)
+            
             # Initialize Hive API
-            self._session = Auth(username, password)
-            self._hive = Hive(self._session)
+            self._hive = Hive(websession=websession)
             
-            # Login and get tokens
-            login_result = await self._session.login()
+            # Login
+            login_success = await self._hive.session.login(username, password)
             
-            if login_result.get("ChallengeName") == "SMS_MFA":
-                _LOGGER.error("MFA challenge received - this should be handled in config flow")
+            if not login_success:
+                _LOGGER.error("Failed to login to Hive")
                 return False
             
-            _LOGGER.info("✓ Successfully authenticated with Hive (tokens valid for 30 days)")
+            _LOGGER.info("✓ Successfully authenticated with Hive")
+            _LOGGER.info("✓ Tokens managed by apyhiveapi (30-day lifetime)")
             
-            # Start session to initialize connection
+            # Start session
             await self._hive.session.startSession()
             
             return True
             
+        except HiveReauthRequired:
+            _LOGGER.error("Re-authentication required - please reconfigure integration")
+            return False
+        except HiveApiError as e:
+            _LOGGER.error("Hive API error: %s", e)
+            return False
         except Exception as e:
             _LOGGER.error("Failed to authenticate with Hive: %s", e)
+            _LOGGER.debug("Setup error details", exc_info=True)
             return False
     
     async def async_update_schedule(self, node_id: str, day: str, schedule: list) -> bool:
@@ -301,7 +311,7 @@ class HiveScheduleAPI:
             
             _LOGGER.debug("Updating schedule for %s: %s", day, schedule_data)
             
-            # Use apyhiveapi's heating module
+            # Use pyhiveapi's heating module
             result = await self._hive.heating.setSchedule(node_id, schedule_data)
             
             if result:
@@ -311,6 +321,12 @@ class HiveScheduleAPI:
                 _LOGGER.error("Failed to update schedule - API returned False")
                 return False
                 
+        except HiveReauthRequired:
+            _LOGGER.error("Re-authentication required. Please reconfigure the integration.")
+            raise HomeAssistantError("Re-authentication required") from None
+        except HiveApiError as e:
+            _LOGGER.error("Hive API error updating schedule: %s", e)
+            raise HomeAssistantError(f"Hive API error: {e}") from e
         except Exception as e:
             _LOGGER.error("Error updating schedule: %s", e)
             _LOGGER.debug("Schedule update error details", exc_info=True)
