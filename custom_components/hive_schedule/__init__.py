@@ -399,22 +399,38 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             
             # Make direct HTTP request to schedule API
             url = f"https://beekeeper-uk.hivehome.com/1.0/nodes/{node_id}"
+            
+            # Try different header formats - Hive API might expect specific format
             headers = {
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "authorization": token,
+                "Authorization": f"Bearer {token}",  # Try Bearer format first
             }
             
             _LOGGER.debug("POST %s", url)
+            _LOGGER.debug("Authorization header: Bearer %s...", token[:20])
             
             async with websession.post(url, json=schedule_data, headers=headers) as response:
                 if response.status == 200:
                     _LOGGER.info("✓ Successfully updated %s schedule", day)
-                elif response.status == 401:
-                    _LOGGER.error("Authentication failed - token may have expired")
-                    # Clear tokens so next call will re-authenticate
-                    hive.session.tokens = None
-                    raise HomeAssistantError("Authentication failed - please try again or reconfigure integration")
+                elif response.status == 401 or response.status == 403:
+                    # Token might be wrong type or format, try without Bearer
+                    _LOGGER.warning("Got %d with Bearer, trying plain token", response.status)
+                    headers["Authorization"] = token
+                    
+                    async with websession.post(url, json=schedule_data, headers=headers) as response2:
+                        if response2.status == 200:
+                            _LOGGER.info("✓ Successfully updated %s schedule (plain token)", day)
+                        else:
+                            error_text = await response2.text()
+                            _LOGGER.error("API still returned %d: %s", response2.status, error_text)
+                            
+                            # Clear tokens so next call will re-authenticate
+                            if response2.status == 401:
+                                hive.session.tokens = None
+                                raise HomeAssistantError("Authentication failed - please reconfigure integration")
+                            else:
+                                raise HomeAssistantError(f"API error {response2.status}")
                 else:
                     error_text = await response.text()
                     _LOGGER.error("API returned %d: %s", response.status, error_text)
