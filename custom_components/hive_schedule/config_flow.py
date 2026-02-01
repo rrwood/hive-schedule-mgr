@@ -1,4 +1,4 @@
-"""Config flow for Hive Schedule Manager integration v2.0 standalone."""
+"""Config flow for Hive Schedule Manager integration v2.1"""
 from __future__ import annotations
 
 import logging
@@ -26,7 +26,7 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._username = None
         self._password = None
         self._hive_auth = None
-        self._login_response = None  # Store login response for MFA
+        self._login_response = None
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -52,8 +52,8 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     return await self.async_step_mfa()
                 
                 # Authentication successful without MFA
-                _LOGGER.info("Authentication successful")
-                return await self._create_entry(auth_tokens=tokens)
+                _LOGGER.info("Authentication successful without MFA")
+                return await self._create_entry(auth_result=tokens)
 
             except Exception as ex:
                 _LOGGER.error("Authentication error: %s", ex)
@@ -81,15 +81,14 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             mfa_code = user_input[CONF_MFA_CODE]
 
             try:
-                # Complete MFA challenge - need to pass the challenge_parameters from login
+                # Complete MFA challenge
                 result = await self._hive_auth.sms_2fa(mfa_code, self._login_response)
                 
                 _LOGGER.info("MFA verification successful")
-                _LOGGER.debug("MFA result: %s", result)
+                _LOGGER.debug("MFA result keys: %s", result.keys() if isinstance(result, dict) else "not a dict")
                 
-                # The result should contain the final authentication tokens
-                # Store them in the config entry
-                return await self._create_entry(auth_tokens=result)
+                # The result contains the final authentication tokens including RefreshToken
+                return await self._create_entry(auth_result=result)
 
             except Exception as ex:
                 _LOGGER.error("MFA verification error: %s", ex)
@@ -107,24 +106,32 @@ class HiveScheduleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             },
         )
 
-    async def _create_entry(self, auth_tokens=None) -> FlowResult:
-        """Create the config entry."""
+    async def _create_entry(self, auth_result: dict) -> FlowResult:
+        """Create the config entry with auth tokens."""
         # Check if already configured
         await self.async_set_unique_id(self._username.lower())
         self._abort_if_unique_id_configured()
         
         _LOGGER.info("Creating config entry for %s", self._username)
         
-        # Prepare data
+        # Extract the critical tokens for 30-day re-authentication
+        auth_tokens = auth_result.get('AuthenticationResult', {})
+        
         entry_data = {
             CONF_USERNAME: self._username,
             CONF_PASSWORD: self._password,
+            # Store all tokens for refresh capability
+            "access_token": auth_tokens.get('AccessToken'),
+            "id_token": auth_tokens.get('IdToken'),
+            "refresh_token": auth_tokens.get('RefreshToken'),  # 30-day token!
+            "token_type": auth_tokens.get('TokenType', 'Bearer'),
+            "expires_in": auth_tokens.get('ExpiresIn', 3600),
         }
         
-        # Store auth tokens if available
-        if auth_tokens:
-            _LOGGER.debug("Storing auth tokens in config entry")
-            entry_data["auth_tokens"] = auth_tokens
+        _LOGGER.debug("Stored tokens: access_token=%s, id_token=%s, refresh_token=%s",
+                     "present" if entry_data["access_token"] else "missing",
+                     "present" if entry_data["id_token"] else "missing", 
+                     "present" if entry_data["refresh_token"] else "missing")
         
         return self.async_create_entry(
             title=self._username,
