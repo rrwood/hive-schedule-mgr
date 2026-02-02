@@ -162,11 +162,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Load tokens from storage or config entry
     stored_data = await store.async_load() or {}
     
+    # Calculate initial expiry if not present (assume tokens are fresh from config flow)
+    initial_expiry = stored_data.get("token_expiry")
+    if not initial_expiry and entry.data.get("access_token"):
+        # Tokens just created in config flow - set expiry to 55 minutes from now
+        initial_expiry = (datetime.now() + timedelta(seconds=3300)).isoformat()
+    
     token_data = {
         "access_token": stored_data.get("access_token") or entry.data.get("access_token"),
         "id_token": stored_data.get("id_token") or entry.data.get("id_token"),
         "refresh_token": stored_data.get("refresh_token") or entry.data.get("refresh_token"),
-        "token_expiry": stored_data.get("token_expiry"),
+        "token_expiry": initial_expiry,
     }
     
     _LOGGER.info("Loaded tokens: access=%s, id=%s, refresh=%s",
